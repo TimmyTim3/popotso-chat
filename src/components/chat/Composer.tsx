@@ -74,7 +74,7 @@ export function Composer({ onSendText, onSendFiles, onSendVoice }: ComposerProps
       const tick = () => {
         analyser.getByteFrequencyData(data);
         let sum = 0;
-        for (let i = 0; i < data.length; i += 1) sum += data[i] * data[i];
+        for (let i = 0; i < data.length; i += 1) sum += data[i]! * data[i]!;
         const level = Math.min(1, Math.sqrt(sum / data.length) / 90);
         setLevels((prev) => [...prev.slice(-45), Math.max(0.08, level)]);
         setElapsed(Date.now() - startedAtRef.current);

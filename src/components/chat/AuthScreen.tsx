@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const HANDLES = Object.keys(MEMBERS) as MemberEmail[];
 
 export function AuthScreen() {
-  const [handle, setHandle] = useState<MemberEmail>(HANDLES[0]);
+  const [handle, setHandle] = useState<MemberEmail>(HANDLES[0]!);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
