@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellOff, Info, LogOut, X } from "lucide-react";
+import { Bell, BellRing, Info, LogOut, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
@@ -10,6 +10,7 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ATTRIBUTION,
+  formatClock,
   formatDayLabel,
   kindForFile,
   previewFor,
@@ -18,6 +19,7 @@ import {
   type ChatMessage,
   type MessageKind,
 } from "@/lib/care-desk";
+import { haptic } from "@/lib/haptics";
 import { currentPushEnabled, enablePush } from "@/lib/push";
 import { notifyPartner } from "@/lib/push.functions";
 
@@ -70,18 +72,8 @@ function Index() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  if (!ready) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-background">
-        <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <AuthScreen onAuthenticated={() => void 0} />;
-  }
-
+  if (!ready) return <div className="min-h-dvh bg-background" />;
+  if (!session) return <AuthScreen />;
   return <ChatRoom session={session} />;
 }
 
@@ -89,77 +81,60 @@ function ChatRoom({ session }: { session: Session }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lightbox, setLightbox] = useState<LightboxItem | null>(null);
   const [showInfo, setShowInfo] = useState(false);
-  const [pushOn, setPushOn] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [pushActive, setPushActive] = useState(false);
+  const [partnerTyping, setPartnerTyping] = useState(false);
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const userId = session.user.id;
   const email = session.user.email ?? "";
 
-  useEffect(() => {
-    void currentPushEnabled().then(setPushOn);
-  }, []);
+  const markAsRead = useCallback(async () => {
+    const now = new Date().toISOString();
+    await (supabase as any)
+      .from("messages")
+      .update({ read_at: now })
+      .neq("sender_id", userId)
+      .is("read_at", null);
+  }, [userId]);
 
-  const scrollToBottom = (smooth = true) => {
-    bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "instant" });
-  };
+  useEffect(() => {
+    void currentPushEnabled().then(setPushActive);
+  }, []);
 
   useEffect(() => {
     let active = true;
-    (async () => {
-      const { data } = await supabase
-        .from("messages")
-        .select("*")
-        .order("created_at", { ascending: true })
-        .limit(300);
-      if (!active || !data) return;
-
-      const hydrated = await Promise.all(
-        data.map(async (row) => {
-          if (row.attachment_path && !row.attachment_url) {
-            const signed = await signedUrlFor(row.attachment_path);
-            return { ...(row as ChatMessage), attachment_url: signed };
-          }
-          return row as ChatMessage;
-        }),
-      );
-      if (active) {
-        setMessages(hydrated);
-        setTimeout(() => scrollToBottom(false), 80);
-
-        const unread = hydrated.filter((m) => m.sender_id !== userId && !m.read_at);
-        unread.forEach((m) => {
-          void supabase
-            .from("messages")
-            .update({ read_at: new Date().toISOString() } as never)
-            .eq("id", m.id);
-        });
-      }
-    })();
+    void supabase
+      .from("messages")
+      .select("*")
+      .order("created_at", { ascending: true })
+      .limit(500)
+      .then(({ data }) => {
+        if (active && data) {
+          setMessages(data as ChatMessage[]);
+          void markAsRead();
+        }
+      });
 
     const channel = supabase
-      .channel("public:messages")
+      .channel("care-desk-messages")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages" },
-        async (payload) => {
-          const row = payload.new as ChatMessage;
-          if (row.sender_id === userId) return;
-
-          let full = row;
-          if (row.attachment_path && !row.attachment_url) {
-            const signed = await signedUrlFor(row.attachment_path);
-            full = { ...row, attachment_url: signed };
-          }
-
+        (payload) => {
+          const incoming = payload.new as ChatMessage;
           setMessages((prev) => {
-            if (prev.some((m) => m.id === full.id)) return prev;
-            return [...prev, full];
+            if (prev.some((m) => m.id === incoming.id)) return prev;
+            const withoutOptimistic = prev.filter(
+              (m) => !(m.pending && m.client_id && m.client_id === incoming.client_id),
+            );
+            return [...withoutOptimistic, incoming];
           });
-          scrollToBottom(true);
-
-          void supabase
-            .from("messages")
-            .update({ read_at: new Date().toISOString() } as never)
-            .eq("id", full.id);
+          if (incoming.sender_id !== userId) {
+            haptic("light");
+            void markAsRead();
+          }
         },
       )
       .on(
@@ -167,17 +142,53 @@ function ChatRoom({ session }: { session: Session }) {
         { event: "UPDATE", schema: "public", table: "messages" },
         (payload) => {
           const updated = payload.new as ChatMessage;
-          setMessages((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
+          setMessages((prev) =>
+            prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+          );
         },
       )
       .subscribe();
 
+    const presenceChannel = supabase
+      .channel("care-desk-presence")
+      .on("broadcast", { event: "typing" }, (event) => {
+        const payload = event.payload as { sender_id?: string };
+        if (payload?.sender_id && payload.sender_id !== userId) {
+          setPartnerTyping(true);
+          if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+          typingTimerRef.current = setTimeout(() => {
+            setPartnerTyping(false);
+          }, 3000);
+        }
+      })
+      .subscribe();
+
     return () => {
       active = false;
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       void supabase.removeChannel(channel);
+      void supabase.removeChannel(presenceChannel);
     };
+  }, [markAsRead, userId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, partnerTyping]);
+           const broadcastTyping = useCallback(() => {
+    void supabase.channel("care-desk-presence").send({
+      type: "broadcast",
+      event: "typing",
+      payload: { sender_id: userId },
+    });
   }, [userId]);
-      const insertMessage = useCallback(
+
+  const patch = useCallback((clientId: string, changes: Partial<ChatMessage>) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.client_id === clientId ? { ...m, ...changes } : m)),
+    );
+  }, []);
+
+  const insert = useCallback(
     async (row: Partial<ChatMessage> & { client_id: string; kind: MessageKind }) => {
       const { data, error } = await supabase
         .from("messages")
@@ -185,91 +196,95 @@ function ChatRoom({ session }: { session: Session }) {
         .select()
         .single();
       if (error) {
-        setMessages((prev) =>
-          prev.map((m) => (m.client_id === row.client_id ? { ...m, failed: true, pending: false } : m)),
-        );
+        patch(row.client_id, { pending: false, failed: true });
         return;
       }
+      haptic("light");
       setMessages((prev) =>
-        prev.map((m) => (m.client_id === row.client_id ? { ...(data as ChatMessage), pending: false } : m)),
+        prev.map((m) =>
+          m.client_id === row.client_id
+            ? { ...(data as ChatMessage), localUrl: m.localUrl, pending: false }
+            : m,
+        ),
       );
-      void notifyPartner({ data: { preview: previewFor(row.kind, row.body) } });
+      void notifyPartner({
+        data: {
+          preview: previewFor(row.kind, row.body),
+        },
+      }).catch(() => {});
     },
-    [userId, email],
+    [email, patch, userId],
   );
 
-  const optimistic = (base: Partial<ChatMessage> & { kind: MessageKind }): ChatMessage => {
-    const client_id = `cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const msg: ChatMessage = {
-      id: client_id,
-      sender_id: userId,
-      sender_email: email,
-      body: base.body ?? null,
-      kind: base.kind,
-      attachment_path: base.attachment_path ?? null,
-      attachment_url: base.attachment_url ?? null,
-      attachment_name: base.attachment_name ?? null,
-      attachment_type: base.attachment_type ?? null,
-      attachment_size: base.attachment_size ?? null,
-      duration_ms: base.duration_ms ?? null,
-      client_id,
-      created_at: new Date().toISOString(),
-      pending: true,
-      progress: base.progress ?? 0,
-      localUrl: base.localUrl,
-    };
-    setMessages((prev) => [...prev, msg]);
-    scrollToBottom(true);
-    return msg;
-  };
+  const optimistic = (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
+    id: clientId,
+    sender_id: userId,
+    sender_email: email,
+    body: null,
+    kind: "text",
+    attachment_path: null,
+    attachment_url: null,
+    attachment_name: null,
+    attachment_type: null,
+    attachment_size: null,
+    duration_ms: null,
+    client_id: clientId,
+    created_at: new Date().toISOString(),
+    pending: true,
+    progress: 0,
+    ...partial,
+  });
 
   const sendText = (body: string) => {
-    const opt = optimistic({ kind: "text", body });
-    void insertMessage({ client_id: opt.client_id!, kind: "text", body });
+    const clientId = crypto.randomUUID();
+    setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
+    void insert({ client_id: clientId, kind: "text", body });
   };
 
-  const sendBlob = async (
-    blob: Blob | File,
-    name: string,
-    kind: MessageKind,
-    durationMs?: number,
-  ) => {
-    const localUrl = URL.createObjectURL(blob);
-    const opt = optimistic({
-      kind,
-      attachment_name: name,
-      attachment_type: blob.type || "application/octet-stream",
-      attachment_size: blob.size,
-      duration_ms: durationMs ?? null,
-      localUrl,
-      progress: 5,
-    });
+  const sendBlob = useCallback(
+    async (blob: Blob, name: string, kind: MessageKind, durationMs?: number) => {
+      const clientId = crypto.randomUUID();
+      const localUrl = URL.createObjectURL(blob);
+      const safeName = name.replace(/[^\w.\-]+/g, "_");
+      const path = `${userId}/${clientId}-${safeName}`;
 
-    try {
-      const ext = name.includes(".") ? name.split(".").pop() : "";
-      const path = `${userId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext ? `.${ext}` : ""}`;
-      await uploadRaw(blob, path, (progress) => {
-        setMessages((prev) =>
-          prev.map((m) => (m.client_id === opt.client_id ? { ...m, progress } : m)),
+      setMessages((prev) => [
+        ...prev,
+        optimistic(
+          {
+            kind,
+            localUrl,
+            attachment_path: path,
+            attachment_name: name,
+            attachment_type: blob.type || null,
+            attachment_size: blob.size,
+            duration_ms: durationMs ?? null,
+          },
+          clientId,
+        ),
+      ]);
+
+      try {
+        await uploadRaw(path, blob, blob.type, (fraction) =>
+          patch(clientId, { progress: fraction }),
         );
-      });
-      const signed = await signedUrlFor(path);
-      await insertMessage({
-        client_id: opt.client_id!,
-        kind,
-        attachment_path: path,
-        attachment_url: signed,
-        attachment_name: name,
-        attachment_type: blob.type || "application/octet-stream",
-        attachment_size: blob.size,
-        duration_ms: durationMs ?? null,
-      });
-    } catch {
-      setMessages((prev) =>
-        prev.map((m) => (m.client_id === opt.client_id ? { ...m, failed: true, pending: false } : m)),
-      );
-    }
-  };
+        const url = await signedUrlFor(path);
+        await insert({
+          client_id: clientId,
+          kind,
+          attachment_path: path,
+          attachment_url: url,
+          attachment_name: name,
+          attachment_type: blob.type || null,
+          attachment_size: blob.size,
+          duration_ms: durationMs ?? null,
+        });
+      } catch {
+        patch(clientId, { pending: false, failed: true });
+      }
+    },
+    [insert, patch, userId],
+  );
 
   const sendFiles = (files: File[]) => {
     files.forEach((file) => {
@@ -286,13 +301,33 @@ function ChatRoom({ session }: { session: Session }) {
     if (emoji) next[userId] = emoji;
     else delete next[userId];
     setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, reactions: next } : m)));
-    void supabase.from("messages").update({ reactions: next } as never).eq("id", message.id);
+    void (supabase as any).from("messages").update({ reactions: next }).eq("id", message.id);
   };
 
-  const togglePush = async () => {
+  const handleEnablePush = async () => {
+    haptic("medium");
     const status = await enablePush(userId);
-    setPushOn(status === "enabled");
+    if (status === "enabled") {
+      setPushActive(true);
+      haptic("success");
+    } else if (status === "open-in-new-tab") {
+      alert("Please open the app directly in Safari or Chrome to enable lock-screen notifications.");
+    } else if (status === "install-first") {
+      alert("On iPhone, tap Share then 'Add to Home Screen' first, then open the installed app to turn on notifications.");
+    } else if (status === "denied") {
+      alert("Notifications are disabled in browser settings. Please permit notifications for Popotso.");
+    }
   };
+
+  const lastOutgoingId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.sender_id === userId && !m.pending && !m.failed) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [messages, userId]);
 
   const grouped = useMemo(() => {
     const groups: { label: string; items: ChatMessage[] }[] = [];
@@ -304,13 +339,6 @@ function ChatRoom({ session }: { session: Session }) {
     });
     return groups;
   }, [messages]);
-
-  const lastOutgoingIndex = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i]?.sender_id === userId) return i;
-    }
-    return -1;
-  }, [messages, userId]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -327,17 +355,24 @@ function ChatRoom({ session }: { session: Session }) {
         >
           <Info className="size-5" />
         </button>
-        <button
-          type="button"
-          aria-label={pushOn ? "Notifications enabled" : "Enable notifications"}
-          onClick={() => void togglePush()}
-          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
-        >
-          {pushOn ? <Bell className="size-[18px] text-primary" /> : <BellOff className="size-[18px]" />}
-        </button>
+
         <h1 className="flex-1 text-center text-[17px] font-semibold tracking-tight">
           Popotso Care Desk
         </h1>
+
+        <button
+          type="button"
+          aria-label={pushActive ? "Notifications active" : "Enable notifications"}
+          onClick={() => void handleEnablePush()}
+          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
+        >
+          {pushActive ? (
+            <BellRing className="size-[18px] text-primary" />
+          ) : (
+            <Bell className="size-[18px]" />
+          )}
+        </button>
+
         <button
           type="button"
           aria-label="Sign out"
@@ -361,20 +396,18 @@ function ChatRoom({ session }: { session: Session }) {
                 {group.label}
               </p>
               {group.items.map((message) => {
-                const isLastOutgoing =
-                  lastOutgoingIndex >= 0 && messages[lastOutgoingIndex]?.id === message.id;
-                const outgoing = message.sender_id === userId;
-                const receipt =
-                  outgoing && isLastOutgoing
-                    ? message.read_at
-                      ? "Read"
-                      : "Delivered"
-                    : null;
+                const isLast = message.id === lastOutgoingId;
+                const receipt = isLast
+                  ? message.read_at
+                    ? `Read ${formatClock(message.read_at)}`
+                    : "Delivered"
+                  : null;
+
                 return (
                   <MessageBubble
                     key={message.client_id ?? message.id}
                     message={message}
-                    outgoing={outgoing}
+                    outgoing={message.sender_id === userId}
                     myId={userId}
                     receipt={receipt}
                     onOpen={setLightbox}
@@ -384,11 +417,25 @@ function ChatRoom({ session }: { session: Session }) {
               })}
             </div>
           ))}
+
+          {partnerTyping && (
+            <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm bg-secondary px-4 py-3 w-fit animate-fade-up">
+              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:-0.32s]" />
+              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:-0.16s]" />
+              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce" />
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
       </main>
 
-      <Composer onSendText={sendText} onSendFiles={sendFiles} onSendVoice={sendVoice} />
+      <Composer
+        onSendText={sendText}
+        onSendFiles={sendFiles}
+        onSendVoice={sendVoice}
+        onTyping={broadcastTyping}
+      />
 
       <Lightbox item={lightbox} onClose={() => setLightbox(null)} />
 
@@ -418,4 +465,4 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-        }
+}
