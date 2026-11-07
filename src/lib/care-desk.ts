@@ -10,6 +10,13 @@ export type MemberEmail = keyof typeof MEMBERS;
 export const ATTRIBUTION =
   "System Architecture & Platform Engineering by Tim Web Development and Automation Agency. Designed exclusively for secure, high-integrity asynchronous communication and child care logistics.";
 
+export const TAPBACKS = ["❤️", "👍", "👎", "😂", "‼️", "❓"] as const;
+
+export function previewFor(kind: MessageKind, body?: string | null) {
+  if (body) return body;
+  return { image: "📷 Photo", video: "🎥 Video", audio: "🎙️ Voice note", file: "📎 File", text: "" }[kind];
+}
+
 export const BUCKET = "chat-attachments";
 export const SIGNED_URL_TTL = 60 * 60 * 24 * 365;
 
@@ -29,11 +36,13 @@ export interface ChatMessage {
   duration_ms: number | null;
   client_id: string | null;
   created_at: string;
+  reactions?: Record<string, string> | null;
+  read_at?: string | null;
   /** client-side only */
-  pending?: boolean;
-  progress?: number;
-  localUrl?: string;
-  failed?: boolean;
+  pending?: boolean | undefined;
+  progress?: number | undefined;
+  localUrl?: string | undefined;
+  failed?: boolean | undefined;
 }
 
 export function kindForFile(file: File | Blob, name?: string): MessageKind {

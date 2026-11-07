@@ -2,6 +2,7 @@ import { Pause, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatDuration } from "@/lib/care-desk";
+import { haptic } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
 interface VoiceNoteProps {
@@ -12,6 +13,7 @@ interface VoiceNoteProps {
 }
 
 const BAR_COUNT = 34;
+const SPEEDS = [1, 1.5, 2] as const;
 
 function bars(seed: string) {
   let hash = 0;
@@ -29,7 +31,9 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [speedIndex, setSpeedIndex] = useState(0);
   const heights = useMemo(() => bars(seed), [seed]);
+  const speed = SPEEDS[speedIndex] ?? 1;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -53,32 +57,40 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
     };
   }, []);
 
-  const toggle = () => {
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = speed;
+  }, [speed]);
+
+  const toggle = (event: React.MouseEvent) => {
+    event.stopPropagation();
     const audio = audioRef.current;
     if (!audio) return;
+    haptic("light");
     if (playing) {
       audio.pause();
       setPlaying(false);
     } else {
+      audio.playbackRate = speed;
       void audio.play();
       setPlaying(true);
     }
   };
 
-  const seek = (event: React.MouseEvent<HTMLDivElement>) => {
+  const seekTo = (clientX: number, target: HTMLElement) => {
     const audio = audioRef.current;
     if (!audio || !audio.duration || !Number.isFinite(audio.duration)) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = (event.clientX - rect.left) / rect.width;
+    const rect = target.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
     audio.currentTime = ratio * audio.duration;
     setProgress(ratio);
   };
 
   return (
-    <div className="flex min-w-[210px] items-center gap-3">
+    <div className="flex min-w-[230px] items-center gap-3">
       <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
-      <button
-        type="button"
+      <span
+        role="button"
+        tabIndex={0}
         onClick={toggle}
         aria-label={playing ? "Pause voice note" : "Play voice note"}
         className={cn(
@@ -91,9 +103,18 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
         ) : (
           <Play className="size-4 translate-x-px fill-current" />
         )}
-      </button>
+      </span>
       <div className="flex flex-1 flex-col gap-1">
-        <div onClick={seek} className="flex h-8 cursor-pointer items-center gap-[3px]">
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            seekTo(e.clientX, e.currentTarget);
+          }}
+          onPointerMove={(e) => {
+            if (e.buttons === 1) seekTo(e.clientX, e.currentTarget);
+          }}
+          className="flex h-8 cursor-pointer touch-none items-center gap-[3px]"
+        >
           {heights.map((height, index) => {
             const active = index / BAR_COUNT <= progress;
             return (
@@ -109,9 +130,27 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
             );
           })}
         </div>
-        <span className="text-[11px] tabular-nums opacity-65">
-          {formatDuration(playing || elapsed > 0 ? elapsed : durationMs)}
-        </span>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] tabular-nums opacity-65">
+            {formatDuration(playing || elapsed > 0 ? elapsed : durationMs)}
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Change playback speed"
+            onClick={(e) => {
+              e.stopPropagation();
+              haptic("light");
+              setSpeedIndex((i) => (i + 1) % SPEEDS.length);
+            }}
+            className={cn(
+              "rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums",
+              outgoing ? "bg-bubble-out-foreground/22" : "bg-foreground/8",
+            )}
+          >
+            {speed}×
+          </span>
+        </div>
       </div>
     </div>
   );
