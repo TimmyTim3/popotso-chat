@@ -10,22 +10,31 @@ import { cn } from "@/lib/utils";
 
 interface MessageBubbleProps {
   message: ChatMessage;
-  /** true = this is my message (right side, blue) */
-  isMine: boolean;
+  /** Preferred name used by the chat screen */
+  isMine?: boolean;
+  /** Legacy name — kept so old builds never break */
+  outgoing?: boolean;
   myId: string;
   receipt?: string | null;
-  onOpenLightbox: (item: LightboxItem) => void;
+  onOpenLightbox?: (item: LightboxItem) => void;
+  onOpen?: (item: LightboxItem) => void;
   onReact: (message: ChatMessage, emoji: string | null) => void;
 }
 
 export function MessageBubble({
   message,
   isMine,
+  outgoing: outgoingProp,
   myId,
   receipt,
   onOpenLightbox,
+  onOpen,
   onReact,
 }: MessageBubbleProps) {
+  // Accept either prop name so the bubble always knows who sent it
+  const outgoing = isMine ?? outgoingProp ?? false;
+  const openLightbox = onOpenLightbox ?? onOpen ?? (() => {});
+
   const [showTime, setShowTime] = useState(false);
   const [picker, setPicker] = useState(false);
   const pressTimer = useRef<number | null>(null);
@@ -36,9 +45,6 @@ export function MessageBubble({
   const reactions = Object.entries(message.reactions ?? {});
   const mine = message.reactions?.[myId] ?? null;
   const canReact = !message.pending && !message.failed;
-
-  // alias so the rest of the component stays readable
-  const outgoing = isMine;
 
   useEffect(() => {
     if (!picker) return;
@@ -70,6 +76,13 @@ export function MessageBubble({
     setPicker(false);
     onReact(message, mine === emoji ? null : emoji);
   };
+
+  // Hard colours so the difference is visible even if a CSS class is missing
+  const bubbleStyle = mediaOnly
+    ? undefined
+    : outgoing
+      ? { backgroundColor: "#0A84FF", color: "#FFFFFF" } // iOS blue
+      : { backgroundColor: "#E9E9EB", color: "#000000" }; // soft grey
 
   return (
     <div
@@ -120,6 +133,7 @@ export function MessageBubble({
           if (longPressed.current) return;
           setShowTime((value) => !value);
         }}
+        style={bubbleStyle}
         className={cn(
           "relative max-w-[80%] animate-bubble-in cursor-pointer text-left select-none transition-transform duration-200 [-webkit-touch-callout:none] active:scale-[0.985]",
           picker && "scale-[1.03]",
@@ -156,7 +170,7 @@ export function MessageBubble({
               onClick={(e) => {
                 e.stopPropagation();
                 if (!uploading && !longPressed.current)
-                  onOpenLightbox({ url, kind: "image", name: message.attachment_name });
+                  openLightbox({ url, kind: "image", name: message.attachment_name });
               }}
               className="block max-h-80 w-full max-w-xs object-cover"
             />
@@ -175,7 +189,7 @@ export function MessageBubble({
               onClick={(e) => {
                 e.stopPropagation();
                 if (!uploading && !longPressed.current)
-                  onOpenLightbox({ url, kind: "video", name: message.attachment_name });
+                  openLightbox({ url, kind: "video", name: message.attachment_name });
               }}
             />
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -210,7 +224,7 @@ export function MessageBubble({
             <span
               className={cn(
                 "flex size-10 items-center justify-center rounded-2xl",
-                outgoing ? "bg-bubble-out-foreground/20" : "bg-foreground/8",
+                outgoing ? "bg-white/20" : "bg-black/8",
               )}
             >
               <FileText className="size-5" />
@@ -237,6 +251,13 @@ export function MessageBubble({
                     : "bg-bubble-in text-bubble-in-foreground",
                 ),
             )}
+            style={
+              mediaOnly
+                ? outgoing
+                  ? { backgroundColor: "#0A84FF", color: "#FFFFFF" }
+                  : { backgroundColor: "#E9E9EB", color: "#000000" }
+                : undefined
+            }
           >
             {message.body}
           </span>
@@ -261,4 +282,4 @@ export function MessageBubble({
       </span>
     </div>
   );
-                        }
+          }
