@@ -1,15 +1,16 @@
-import { Loader2, Lock } from "lucide-react";
+import { Eye, EyeOff, Loader2, Lock } from "lucide-react";
 import { useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
 import { MEMBERS, type MemberEmail } from "@/lib/care-desk";
 import { cn } from "@/lib/utils";
 
-const HANDLES = Object.keys(MEMBERS) as MemberEmail[];
+const HANDLES: MemberEmail[] = ["tim@popotso.app", "nicky@popotso.app"];
 
 export function AuthScreen() {
   const [handle, setHandle] = useState<MemberEmail>(HANDLES[0]!);
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +29,7 @@ export function AuthScreen() {
       return;
     }
 
-    // First-time setup for this internal handle: create it, then sign in.
+    // First-time setup fallback
     const signUp = await supabase.auth.signUp({ email: handle, password });
     if (!signUp.error) {
       const second = await supabase.auth.signInWithPassword({ email: handle, password });
@@ -77,14 +78,24 @@ export function AuthScreen() {
 
         <div className="rounded-2xl border border-border bg-card">
           <p className="hairline-b px-4 py-3 text-[15px] text-muted-foreground">{handle}</p>
-          <input
-            type="password"
-            value={password}
-            autoComplete="current-password"
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Passcode"
-            className="w-full bg-transparent px-4 py-3 text-[16.5px] outline-none placeholder:text-muted-foreground"
-          />
+          <div className="relative flex items-center">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              autoComplete="current-password"
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Passcode"
+              className="w-full bg-transparent px-4 py-3 pr-11 text-[16.5px] outline-none placeholder:text-muted-foreground"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((prev) => !prev)}
+              aria-label={showPassword ? "Hide passcode" : "Show passcode"}
+              className="absolute right-3 p-1 text-muted-foreground transition-colors hover:text-foreground active:scale-90"
+            >
+              {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
+            </button>
+          </div>
         </div>
 
         {error && <p className="mt-3 text-center text-[13px] text-destructive">{error}</p>}
