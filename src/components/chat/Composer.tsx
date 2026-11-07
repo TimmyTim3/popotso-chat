@@ -8,9 +8,10 @@ interface ComposerProps {
   onSendText: (text: string) => void;
   onSendFiles: (files: File[]) => void;
   onSendVoice: (blob: Blob, durationMs: number) => void;
+  onTyping?: () => void;
 }
 
-export function Composer({ onSendText, onSendFiles, onSendVoice }: ComposerProps) {
+export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: ComposerProps) {
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -162,7 +163,10 @@ export function Composer({ onSendText, onSendFiles, onSendVoice }: ComposerProps
               rows={1}
               value={text}
               placeholder="Message"
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                setText(event.target.value);
+                onTyping?.();
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -190,4 +194,4 @@ export function Composer({ onSendText, onSendFiles, onSendVoice }: ComposerProps
       )}
     </div>
   );
-}
+          }
