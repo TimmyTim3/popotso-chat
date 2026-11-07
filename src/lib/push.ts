@@ -47,7 +47,8 @@ export async function enablePush(userId: string): Promise<PushStatus> {
         applicationServerKey: toUint8(VAPID_PUBLIC_KEY),
       }));
     const json = sub.toJSON();
-    const { error } = await supabase.from("push_subscriptions").upsert(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from("push_subscriptions").upsert(
       {
         user_id: userId,
         endpoint: sub.endpoint,

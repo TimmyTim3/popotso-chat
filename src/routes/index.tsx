@@ -129,7 +129,7 @@ function ChatRoom({ session }: { session: Session }) {
     async (row: Partial<ChatMessage> & { client_id: string; kind: MessageKind }) => {
       const { data, error } = await supabase
         .from("messages")
-        .insert({ ...row, sender_id: userId, sender_email: email })
+        .insert({ ...row, sender_id: userId, sender_email: email } as never)
         .select()
         .single();
       if (error) {
@@ -227,6 +227,14 @@ function ChatRoom({ session }: { session: Session }) {
     void sendBlob(blob, `voice-note-${Date.now()}.webm`, "audio", durationMs);
   };
 
+  const react = (message: ChatMessage, emoji: string | null) => {
+    const next = { ...(message.reactions ?? {}) };
+    if (emoji) next[userId] = emoji;
+    else delete next[userId];
+    setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, reactions: next } : m)));
+    void supabase.from("messages").update({ reactions: next } as never).eq("id", message.id);
+  };
+
   const grouped = useMemo(() => {
     const groups: { label: string; items: ChatMessage[] }[] = [];
     messages.forEach((message) => {
@@ -283,7 +291,9 @@ function ChatRoom({ session }: { session: Session }) {
                   key={message.client_id ?? message.id}
                   message={message}
                   outgoing={message.sender_id === userId}
+                  myId={userId}
                   onOpen={setLightbox}
+                  onReact={react}
                 />
               ))}
             </div>

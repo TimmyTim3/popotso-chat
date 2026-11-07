@@ -18,7 +18,9 @@ export const notifyPartner = createServerFn({ method: "POST" })
     const jwk = process.env["VAPID_PRIVATE_JWK"];
     if (!jwk) return { sent: 0 };
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin: admin } = await import("@/integrations/supabase/client.server");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const supabaseAdmin = admin as any;
     const { data: subs } = await supabaseAdmin
       .from("push_subscriptions")
       .select("id, endpoint, p256dh, auth")
@@ -27,7 +29,7 @@ export const notifyPartner = createServerFn({ method: "POST" })
     const title = email === "tim@popotso.app" ? "Father" : "Mother";
     let sent = 0;
     await Promise.all(
-      (subs ?? []).map(async (sub) => {
+      ((subs ?? []) as { id: string; endpoint: string; p256dh: string; auth: string }[]).map(async (sub) => {
         try {
           const req = await buildPushHTTPRequest({
             privateJWK: JSON.parse(jwk),
