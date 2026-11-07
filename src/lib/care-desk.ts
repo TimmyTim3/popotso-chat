@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 export const MEMBERS = {
   "tim@popotso.app": "Father",
+  "nicky@popotso.app": "Mother",
   "mother@popotso.app": "Mother",
 } as const;
 
@@ -127,4 +128,5 @@ export async function signedUrlFor(path: string) {
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, SIGNED_URL_TTL);
   if (error) throw error;
   return data.signedUrl;
-}
+    }
+    
