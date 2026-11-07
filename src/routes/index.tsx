@@ -1,12 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellRing, Info, LogOut, X } from "lucide-react";
+import { Bell, BellRing, Info, LogOut, Phone, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
 import { Composer } from "@/components/chat/Composer";
 import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
 import { MessageBubble } from "@/components/chat/MessageBubble";
+import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ATTRIBUTION,
@@ -84,11 +85,21 @@ function ChatRoom({ session }: { session: Session }) {
   const [pushActive, setPushActive] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
 
+  // Call states
+  const [calling, setCalling] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<{
+    callerId: string;
+    callerName: string;
+    sdp: RTCSessionDescriptionInit;
+  } | null>(null);
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const callChannelRef = useRef<RealtimeChannel | null>(null);
 
   const userId = session.user.id;
   const email = session.user.email ?? "";
+  const partnerEmail = email === "tim@popotso.app" ? "mother@popotso.app" : "tim@popotso.app";
 
   const markAsRead = useCallback(async () => {
     const now = new Date().toISOString();
@@ -152,7 +163,7 @@ function ChatRoom({ session }: { session: Session }) {
     const presenceChannel = supabase
       .channel("care-desk-presence")
       .on("broadcast", { event: "typing" }, (event) => {
-        const payload = event.payload as { sender_id?: string };
+        const payload = (event as Record<string, unknown>)["payload"] as { sender_id?: string } | undefined;
         if (payload?.sender_id && payload.sender_id !== userId) {
           setPartnerTyping(true);
           if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
@@ -163,18 +174,35 @@ function ChatRoom({ session }: { session: Session }) {
       })
       .subscribe();
 
+    const callChannel = supabase
+      .channel("care-desk-calls")
+      .on("broadcast", { event: "call-offer" }, (event) => {
+        const payload = (event as Record<string, unknown>)["payload"] as
+          | { callerId: string; callerName: string; sdp: RTCSessionDescriptionInit }
+          | undefined;
+        if (payload && payload.callerId !== userId) {
+          haptic("success");
+          setIncomingCall(payload);
+        }
+      })
+      .subscribe();
+
+    callChannelRef.current = callChannel;
+
     return () => {
       active = false;
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       void supabase.removeChannel(channel);
       void supabase.removeChannel(presenceChannel);
+      void supabase.removeChannel(callChannel);
     };
   }, [markAsRead, userId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, partnerTyping]);
-           const broadcastTyping = useCallback(() => {
+
+  const broadcastTyping = useCallback(() => {
     void supabase.channel("care-desk-presence").send({
       type: "broadcast",
       event: "typing",
@@ -234,7 +262,6 @@ function ChatRoom({ session }: { session: Session }) {
     progress: 0,
     ...partial,
   });
-
   const sendText = (body: string) => {
     const clientId = crypto.randomUUID();
     setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
@@ -319,6 +346,11 @@ function ChatRoom({ session }: { session: Session }) {
     }
   };
 
+  const startVoiceCall = () => {
+    haptic("medium");
+    setCalling(true);
+  };
+
   const lastOutgoingId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
@@ -359,6 +391,15 @@ function ChatRoom({ session }: { session: Session }) {
         <h1 className="flex-1 text-center text-[17px] font-semibold tracking-tight">
           Popotso Care Desk
         </h1>
+
+        <button
+          type="button"
+          aria-label="Call (Ultra-Low Data)"
+          onClick={startVoiceCall}
+          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
+        >
+          <Phone className="size-[18px]" />
+        </button>
 
         <button
           type="button"
@@ -439,6 +480,20 @@ function ChatRoom({ session }: { session: Session }) {
 
       <Lightbox item={lightbox} onClose={() => setLightbox(null)} />
 
+      {(calling || incomingCall) && callChannelRef.current && (
+        <VoiceCallModal
+          myId={userId}
+          myEmail={email}
+          partnerEmail={partnerEmail}
+          channel={callChannelRef.current}
+          incomingCall={incomingCall}
+          onClose={() => {
+            setCalling(false);
+            setIncomingCall(null);
+          }}
+        />
+      )}
+
       {showInfo && (
         <div
           className="fixed inset-0 z-40 flex animate-fade-up items-end justify-center bg-foreground/40 p-3 sm:items-center"
@@ -465,4 +520,5 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-}
+          }
+              
