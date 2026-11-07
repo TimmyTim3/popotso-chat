@@ -479,9 +479,11 @@ function ChatRoom({ session }: { session: Session }) {
                     key={msg.id}
                     message={msg}
                     isMine={isMine}
+                    outgoing={isMine}
                     myId={userId}
                     receipt={receipt}
                     onOpenLightbox={(item) => setLightboxItem(item)}
+                    onOpen={(item) => setLightboxItem(item)}
                     onReact={react}
                   />
                 );
