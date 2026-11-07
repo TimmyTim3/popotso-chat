@@ -3,7 +3,7 @@ import { buildPushHTTPRequest } from "@pushforge/builder";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-const MEMBERS = ["tim@popotso.app", "mother@popotso.app"];
+const MEMBERS = ["tim@popotso.app", "nicky@popotso.app", "mother@popotso.app"];
 
 /** Sends a lock-screen alert to the other parent's devices. */
 export const notifyPartner = createServerFn({ method: "POST" })
