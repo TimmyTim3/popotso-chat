@@ -18,6 +18,7 @@ import {
   signedUrlFor,
   uploadRaw,
   type ChatMessage,
+  type MemberEmail,
   type MessageKind,
 } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
@@ -48,45 +49,53 @@ export const Route = createFileRoute("/")({
 
 function useSystemTheme() {
   useEffect(() => {
+    const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => document.documentElement.classList.toggle("dark", media.matches);
-    apply();
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
+    const apply = (dark: boolean) => {
+      root.classList.toggle("dark", dark);
+    };
+    apply(media.matches);
+    const handler = (e: MediaQueryListEvent) => apply(e.matches);
+    media.addEventListener("change", handler);
+    return () => media.removeEventListener("change", handler);
   }, []);
 }
 
 function Index() {
   useSystemTheme();
   const [session, setSession] = useState<Session | null>(null);
-  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-      setReady(true);
-    });
-    void supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
-      setReady(true);
+      setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, current) => {
+      setSession(current);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  if (!ready) return <div className="min-h-dvh bg-background" />;
+  if (loading) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center text-muted-foreground text-[15px]">
+        Loading Popotso…
+      </div>
+    );
+  }
+
   if (!session) return <AuthScreen />;
   return <ChatRoom session={session} />;
 }
 
 function ChatRoom({ session }: { session: Session }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [lightbox, setLightbox] = useState<LightboxItem | null>(null);
-  const [showInfo, setShowInfo] = useState(false);
+  const [lightboxItem, setLightboxItem] = useState<LightboxItem | null>(null);
+  const [showAttribution, setShowAttribution] = useState(false);
   const [pushActive, setPushActive] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
-
-  // Call states
-  const [calling, setCalling] = useState(false);
+  const [inCall, setInCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
     callerId: string;
     callerName: string;
@@ -99,10 +108,12 @@ function ChatRoom({ session }: { session: Session }) {
 
   const userId = session.user.id;
   const email = session.user.email ?? "";
-  const partnerEmail = email === "tim@popotso.app" ? "mother@popotso.app" : "tim@popotso.app";
+  const partnerEmail: MemberEmail =
+    email === "tim@popotso.app" ? "nicky@popotso.app" : "tim@popotso.app";
 
   const markAsRead = useCallback(async () => {
     const now = new Date().toISOString();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any)
       .from("messages")
       .update({ read_at: now })
@@ -120,30 +131,55 @@ function ChatRoom({ session }: { session: Session }) {
       .from("messages")
       .select("*")
       .order("created_at", { ascending: true })
-      .limit(500)
-      .then(({ data }) => {
-        if (active && data) {
-          setMessages(data as ChatMessage[]);
+      .then(async ({ data, error }) => {
+        if (!active || error || !data) return;
+        const resolved = await Promise.all(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data.map(async (row: any) => {
+            const m = row as ChatMessage;
+            if (m.attachment_path && !m.attachment_url) {
+              try {
+                m.attachment_url = await signedUrlFor(m.attachment_path);
+              } catch (e) {
+                console.error("Failed to sign URL", e);
+              }
+            }
+            return m;
+          }),
+        );
+        if (active) {
+          setMessages(resolved);
           void markAsRead();
         }
       });
 
     const channel = supabase
-      .channel("care-desk-messages")
+      .channel("care-desk-realtime")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          const incoming = payload.new as ChatMessage;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        async (payload: any) => {
+          const row = payload.new as ChatMessage;
+          if (row.attachment_path && !row.attachment_url) {
+            try {
+              row.attachment_url = await signedUrlFor(row.attachment_path);
+            } catch (e) {
+              console.error(e);
+            }
+          }
           setMessages((prev) => {
-            if (prev.some((m) => m.id === incoming.id)) return prev;
-            const withoutOptimistic = prev.filter(
-              (m) => !(m.pending && m.client_id && m.client_id === incoming.client_id),
-            );
-            return [...withoutOptimistic, incoming];
+            const idx = row.client_id ? prev.findIndex((m) => m.client_id === row.client_id) : -1;
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = row;
+              return next;
+            }
+            if (prev.some((m) => m.id === row.id)) return prev;
+            return [...prev, row];
           });
-          if (incoming.sender_id !== userId) {
-            haptic("light");
+          if (row.sender_id !== userId) {
+            haptic("tap");
             void markAsRead();
           }
         },
@@ -151,90 +187,82 @@ function ChatRoom({ session }: { session: Session }) {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "messages" },
-        (payload) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (payload: any) => {
           const updated = payload.new as ChatMessage;
           setMessages((prev) =>
-            prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+            prev.map((m) =>
+              m.id === updated.id ? { ...m, reactions: updated.reactions, read_at: updated.read_at } : m,
+            ),
           );
         },
       )
-      .subscribe();
-
-    const presenceChannel = supabase
-      .channel("care-desk-presence")
-      .on("broadcast", { event: "typing" }, (event) => {
-        const payload = (event as Record<string, unknown>)["payload"] as { sender_id?: string } | undefined;
-        if (payload?.sender_id && payload.sender_id !== userId) {
+      .on("broadcast", { event: "typing" }, (payload) => {
+        if (payload.payload?.senderId !== userId) {
           setPartnerTyping(true);
           if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-          typingTimerRef.current = setTimeout(() => {
-            setPartnerTyping(false);
-          }, 3000);
+          typingTimerRef.current = setTimeout(() => setPartnerTyping(false), 2500);
         }
       })
       .subscribe();
-
-    const callChannel = supabase
-      .channel("care-desk-calls")
-      .on("broadcast", { event: "call-offer" }, (event) => {
-        const payload = (event as Record<string, unknown>)["payload"] as
-          | { callerId: string; callerName: string; sdp: RTCSessionDescriptionInit }
-          | undefined;
-        if (payload && payload.callerId !== userId) {
-          haptic("success");
-          setIncomingCall(payload);
-        }
-      })
-      .subscribe();
-
-    callChannelRef.current = callChannel;
 
     return () => {
       active = false;
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       void supabase.removeChannel(channel);
-      void supabase.removeChannel(presenceChannel);
-      void supabase.removeChannel(callChannel);
     };
   }, [markAsRead, userId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, partnerTyping]);
-
-  const broadcastTyping = useCallback(() => {
-    void supabase.channel("care-desk-presence").send({
-      type: "broadcast",
-      event: "typing",
-      payload: { sender_id: userId },
+    const callChan = supabase.channel("care-desk-call-signaling", {
+      config: { broadcast: { self: false } },
     });
-  }, [userId]);
+    callChan
+      .on("broadcast", { event: "offer" }, ({ payload }) => {
+        if (payload?.targetEmail === email && payload?.sdp) {
+          haptic("notification");
+          setIncomingCall({
+            callerId: payload.callerId,
+            callerName: payload.callerName,
+            sdp: payload.sdp,
+          });
+          setInCall(true);
+        }
+      })
+      .subscribe();
 
-  const patch = useCallback((clientId: string, changes: Partial<ChatMessage>) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.client_id === clientId ? { ...m, ...changes } : m)),
-    );
+    callChannelRef.current = callChan;
+    return () => {
+      void supabase.removeChannel(callChan);
+    };
+  }, [email]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, partnerTyping]);
+
+  const patch = useCallback((clientId: string, delta: Partial<ChatMessage>) => {
+    setMessages((prev) => prev.map((m) => (m.client_id === clientId ? { ...m, ...delta } : m)));
   }, []);
 
   const insert = useCallback(
-    async (row: Partial<ChatMessage> & { client_id: string; kind: MessageKind }) => {
-      const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (row: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
         .from("messages")
-        .insert({ ...row, sender_id: userId, sender_email: email } as never)
+        .insert({
+          ...row,
+          sender_id: userId,
+          sender_email: email,
+        })
         .select()
         .single();
       if (error) {
-        patch(row.client_id, { pending: false, failed: true });
+        console.error("Message send failed:", error);
+        if (row.client_id) patch(row.client_id, { failed: true, pending: false });
         return;
       }
-      haptic("light");
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.client_id === row.client_id
-            ? { ...(data as ChatMessage), localUrl: m.localUrl, pending: false }
-            : m,
-        ),
-      );
+      if (row.client_id) patch(row.client_id, { id: data.id, pending: false });
       void notifyPartner({
         data: {
           preview: previewFor(row.kind, row.body),
@@ -262,7 +290,7 @@ function ChatRoom({ session }: { session: Session }) {
     progress: 0,
     ...partial,
   });
-  const sendText = (body: string) => {
+        const sendText = (body: string) => {
     const clientId = crypto.randomUUID();
     setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
     void insert({ client_id: clientId, kind: "text", body });
@@ -283,204 +311,220 @@ function ChatRoom({ session }: { session: Session }) {
             localUrl,
             attachment_path: path,
             attachment_name: name,
-            attachment_type: blob.type || null,
+            attachment_type: blob.type,
             attachment_size: blob.size,
             duration_ms: durationMs ?? null,
+            progress: 0,
           },
           clientId,
         ),
       ]);
 
       try {
-        await uploadRaw(path, blob, blob.type, (fraction) =>
-          patch(clientId, { progress: fraction }),
-        );
+        await uploadRaw(path, blob, blob.type, (fraction) => {
+          patch(clientId, { progress: fraction });
+        });
         const url = await signedUrlFor(path);
+        patch(clientId, { attachment_url: url, progress: 1 });
         await insert({
           client_id: clientId,
           kind,
           attachment_path: path,
           attachment_url: url,
           attachment_name: name,
-          attachment_type: blob.type || null,
+          attachment_type: blob.type,
           attachment_size: blob.size,
           duration_ms: durationMs ?? null,
         });
-      } catch {
-        patch(clientId, { pending: false, failed: true });
+      } catch (e) {
+        console.error("Upload failed", e);
+        patch(clientId, { failed: true, pending: false });
       }
     },
-    [insert, patch, userId],
+    [insert, optimistic, patch, userId],
   );
 
-  const sendFiles = (files: File[]) => {
-    files.forEach((file) => {
-      void sendBlob(file, file.name, kindForFile(file, file.name));
+  const sendFiles = (files: FileList | File[]) => {
+    Array.from(files).forEach((file) => {
+      const kind = kindForFile(file, file.name);
+      void sendBlob(file, file.name, kind);
     });
   };
 
   const sendVoice = (blob: Blob, durationMs: number) => {
-    void sendBlob(blob, `voice-note-${Date.now()}.webm`, "audio", durationMs);
+    void sendBlob(blob, `voice-${Date.now()}.webm`, "audio", durationMs);
   };
 
-  const react = (message: ChatMessage, emoji: string | null) => {
-    const next = { ...(message.reactions ?? {}) };
-    if (emoji) next[userId] = emoji;
-    else delete next[userId];
-    setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, reactions: next } : m)));
-    void (supabase as any).from("messages").update({ reactions: next }).eq("id", message.id);
+  const react = async (messageId: string, emoji: string) => {
+    const target = messages.find((m) => m.id === messageId);
+    if (!target) return;
+    const current = { ...(target.reactions ?? {}) };
+    if (current[userId] === emoji) delete current[userId];
+    else current[userId] = emoji;
+
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from("messages").update({ reactions: current }).eq("id", messageId);
   };
 
-  const handleEnablePush = async () => {
-    haptic("medium");
-    const status = await enablePush(userId);
-    if (status === "enabled") {
+  const enableNotifications = async () => {
+    const res = await enablePush();
+    if (res.state === "subscribed") {
       setPushActive(true);
       haptic("success");
-    } else if (status === "open-in-new-tab") {
-      alert("Please open the app directly in Safari or Chrome to enable lock-screen notifications.");
-    } else if (status === "install-first") {
-      alert("On iPhone, tap Share then 'Add to Home Screen' first, then open the installed app to turn on notifications.");
-    } else if (status === "denied") {
-      alert("Notifications are disabled in browser settings. Please permit notifications for Popotso.");
+    } else {
+      alert(`Notification status: ${res.state}`);
     }
   };
-
-  const startVoiceCall = () => {
-    haptic("medium");
-    setCalling(true);
-  };
-
-  const lastOutgoingId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m && m.sender_id === userId && !m.pending && !m.failed) {
-        return m.id;
-      }
-    }
-    return null;
-  }, [messages, userId]);
 
   const grouped = useMemo(() => {
     const groups: { label: string; items: ChatMessage[] }[] = [];
-    messages.forEach((message) => {
-      const label = formatDayLabel(message.created_at);
+    messages.forEach((msg) => {
+      const label = formatDayLabel(msg.created_at);
       const last = groups[groups.length - 1];
-      if (last && last.label === label) last.items.push(message);
-      else groups.push({ label, items: [message] });
+      if (last && last.label === label) last.items.push(msg);
+      else groups.push({ label, items: [msg] });
     });
     return groups;
   }, [messages]);
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-  };
+  const lastOutgoingIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.sender_id === userId && !m.pending && !m.failed) return i;
+    }
+    return -1;
+  }, [messages, userId]);
+
+  const lastOutgoingMessage = lastOutgoingIndex >= 0 ? messages[lastOutgoingIndex] : null;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
-      <header className="glass hairline-b sticky top-0 z-20 flex items-center gap-2 px-4 pt-[max(0.7rem,env(safe-area-inset-top))] pb-2.5">
-        <button
-          type="button"
-          aria-label="About this system"
-          onClick={() => setShowInfo(true)}
-          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
-        >
-          <Info className="size-5" />
-        </button>
+    <div className="flex min-h-dvh flex-col bg-background text-foreground">
+      {/* iOS 18 Header Bar */}
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/60 bg-background/80 px-4 backdrop-blur-md">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowAttribution(true)}
+            className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="App info"
+          >
+            <Info className="size-4" />
+          </button>
+          <div>
+            <h1 className="text-[17px] font-semibold tracking-tight">Popotso Care Desk</h1>
+            <p className="text-[11px] text-muted-foreground">Private Line</p>
+          </div>
+        </div>
 
-        <h1 className="flex-1 text-center text-[17px] font-semibold tracking-tight">
-          Popotso Care Desk
-        </h1>
+        <div className="flex items-center gap-1">
+          {/* Audio Call Button */}
+          <button
+            type="button"
+            onClick={() => {
+              haptic("tap");
+              setIncomingCall(null);
+              setInCall(true);
+            }}
+            className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Call Nicky"
+            title="Start low-data audio call"
+          >
+            <Phone className="size-4 text-primary" />
+          </button>
 
-        <button
-          type="button"
-          aria-label="Call (Ultra-Low Data)"
-          onClick={startVoiceCall}
-          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
-        >
-          <Phone className="size-[18px]" />
-        </button>
+          {/* Notification Alert Bell */}
+          <button
+            type="button"
+            onClick={enableNotifications}
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Enable notifications"
+            title={pushActive ? "Push alerts enabled" : "Turn on push notifications"}
+          >
+            {pushActive ? <BellRing className="size-4 text-primary" /> : <Bell className="size-4" />}
+          </button>
 
-        <button
-          type="button"
-          aria-label={pushActive ? "Notifications active" : "Enable notifications"}
-          onClick={() => void handleEnablePush()}
-          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
-        >
-          {pushActive ? (
-            <BellRing className="size-[18px] text-primary" />
-          ) : (
-            <Bell className="size-[18px]" />
-          )}
-        </button>
-
-        <button
-          type="button"
-          aria-label="Sign out"
-          onClick={() => void signOut()}
-          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
-        >
-          <LogOut className="size-[18px]" />
-        </button>
+          <button
+            type="button"
+            onClick={() => supabase.auth.signOut()}
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Sign out"
+          >
+            <LogOut className="size-4" />
+          </button>
+        </div>
       </header>
 
-      <main className="flex-1 px-3 py-4">
-        {grouped.length === 0 && (
-          <p className="mt-24 text-center text-[14px] text-muted-foreground">
-            This line is empty. Say something.
-          </p>
-        )}
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-1.5">
-          {grouped.map((group) => (
-            <div key={group.label} className="flex flex-col gap-1.5">
-              <p className="my-3 text-center text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+      {/* Messages Scroll Area */}
+      <main className="flex-1 overflow-y-auto px-4 py-4">
+        {grouped.map((group) => (
+          <div key={group.label} className="mb-6">
+            <div className="my-3 text-center">
+              <span className="rounded-full bg-secondary/80 px-3 py-1 text-[11px] font-medium text-muted-foreground">
                 {group.label}
-              </p>
-              {group.items.map((message) => {
-                const isLast = message.id === lastOutgoingId;
-                const receipt = isLast
-                  ? message.read_at
-                    ? `Read ${formatClock(message.read_at)}`
-                    : "Delivered"
-                  : null;
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {group.items.map((msg) => {
+                const isMine = msg.sender_id === userId;
+                const isLatest = lastOutgoingMessage?.id === msg.id;
+                let receipt: string | null = null;
+                if (isMine && isLatest) {
+                  receipt = msg.read_at ? `Read ${formatClock(msg.read_at)}` : "Delivered";
+                }
 
                 return (
                   <MessageBubble
-                    key={message.client_id ?? message.id}
-                    message={message}
-                    outgoing={message.sender_id === userId}
+                    key={msg.id}
+                    message={msg}
+                    isMine={isMine}
                     myId={userId}
                     receipt={receipt}
-                    onOpen={setLightbox}
+                    onOpenLightbox={(item) => setLightboxItem(item)}
                     onReact={react}
                   />
                 );
               })}
             </div>
-          ))}
+          </div>
+        ))}
 
-          {partnerTyping && (
-            <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm bg-secondary px-4 py-3 w-fit animate-fade-up">
-              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:-0.32s]" />
-              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:-0.16s]" />
-              <span className="size-2 rounded-full bg-muted-foreground/60 animate-bounce" />
-            </div>
-          )}
+        {partnerTyping && (
+          <div className="flex items-center gap-1.5 px-2 py-1 text-muted-foreground">
+            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground" />
+            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0.2s]" />
+            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0.4s]" />
+          </div>
+        )}
 
-          <div ref={bottomRef} />
-        </div>
+        <div ref={bottomRef} />
       </main>
 
-      <Composer
-        onSendText={sendText}
-        onSendFiles={sendFiles}
-        onSendVoice={sendVoice}
-        onTyping={broadcastTyping}
-      />
+      {/* Message Composer */}
+      <footer className="sticky bottom-0 border-t border-border/60 bg-background/80 p-2 backdrop-blur-md">
+        <Composer
+          onSendText={sendText}
+          onSendFiles={sendFiles}
+          onSendVoice={sendVoice}
+          onTyping={() => {
+            const chan = supabase.channel("care-desk-realtime");
+            void chan.send({
+              type: "broadcast",
+              event: "typing",
+              payload: { senderId: userId },
+            });
+          }}
+        />
+      </footer>
 
-      <Lightbox item={lightbox} onClose={() => setLightbox(null)} />
+      {/* Lightbox */}
+      {lightboxItem && (
+        <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
+      )}
 
-      {(calling || incomingCall) && callChannelRef.current && (
+      {/* Low-Data Voice Call Modal */}
+      {inCall && callChannelRef.current && (
         <VoiceCallModal
           myId={userId}
           myEmail={email}
@@ -488,37 +532,32 @@ function ChatRoom({ session }: { session: Session }) {
           channel={callChannelRef.current}
           incomingCall={incomingCall}
           onClose={() => {
-            setCalling(false);
+            setInCall(false);
             setIncomingCall(null);
           }}
         />
       )}
 
-      {showInfo && (
-        <div
-          className="fixed inset-0 z-40 flex animate-fade-up items-end justify-center bg-foreground/40 p-3 sm:items-center"
-          onClick={() => setShowInfo(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-3xl bg-card p-6 shadow-xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-[17px] font-semibold">Technical attribution</h2>
+      {/* Attribution Drawer */}
+      {showAttribution && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="max-w-md rounded-3xl bg-card p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-[17px] font-semibold">About Popotso Care Desk</h2>
               <button
                 type="button"
-                aria-label="Close"
-                onClick={() => setShowInfo(false)}
-                className="flex size-8 items-center justify-center rounded-full bg-secondary text-secondary-foreground"
+                onClick={() => setShowAttribution(false)}
+                className="flex size-7 items-center justify-center rounded-full bg-secondary text-muted-foreground"
               >
                 <X className="size-4" />
               </button>
             </div>
-            <p className="text-[14.5px] leading-relaxed text-muted-foreground">{ATTRIBUTION}</p>
+            <p className="text-[13.5px] leading-relaxed text-muted-foreground">
+              {ATTRIBUTION}
+            </p>
           </div>
         </div>
       )}
     </div>
   );
-          }
-              
+}
