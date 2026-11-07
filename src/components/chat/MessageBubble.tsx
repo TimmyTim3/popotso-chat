@@ -10,14 +10,22 @@ import { cn } from "@/lib/utils";
 
 interface MessageBubbleProps {
   message: ChatMessage;
-  outgoing: boolean;
+  /** true = this is my message (right side, blue) */
+  isMine: boolean;
   myId: string;
   receipt?: string | null;
-  onOpen: (item: LightboxItem) => void;
+  onOpenLightbox: (item: LightboxItem) => void;
   onReact: (message: ChatMessage, emoji: string | null) => void;
 }
 
-export function MessageBubble({ message, outgoing, myId, receipt, onOpen, onReact }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  isMine,
+  myId,
+  receipt,
+  onOpenLightbox,
+  onReact,
+}: MessageBubbleProps) {
   const [showTime, setShowTime] = useState(false);
   const [picker, setPicker] = useState(false);
   const pressTimer = useRef<number | null>(null);
@@ -28,6 +36,9 @@ export function MessageBubble({ message, outgoing, myId, receipt, onOpen, onReac
   const reactions = Object.entries(message.reactions ?? {});
   const mine = message.reactions?.[myId] ?? null;
   const canReact = !message.pending && !message.failed;
+
+  // alias so the rest of the component stays readable
+  const outgoing = isMine;
 
   useEffect(() => {
     if (!picker) return;
@@ -145,7 +156,7 @@ export function MessageBubble({ message, outgoing, myId, receipt, onOpen, onReac
               onClick={(e) => {
                 e.stopPropagation();
                 if (!uploading && !longPressed.current)
-                  onOpen({ url, kind: "image", name: message.attachment_name });
+                  onOpenLightbox({ url, kind: "image", name: message.attachment_name });
               }}
               className="block max-h-80 w-full max-w-xs object-cover"
             />
@@ -160,18 +171,18 @@ export function MessageBubble({ message, outgoing, myId, receipt, onOpen, onReac
               preload="metadata"
               playsInline
               muted
+              className="block max-h-80 w-full max-w-xs object-cover"
               onClick={(e) => {
                 e.stopPropagation();
                 if (!uploading && !longPressed.current)
-                  onOpen({ url, kind: "video", name: message.attachment_name });
+                  onOpenLightbox({ url, kind: "video", name: message.attachment_name });
               }}
-              className="block max-h-80 w-full max-w-xs bg-foreground/10 object-cover"
             />
-            {!uploading && (
-              <span className="glass pointer-events-none absolute inset-0 m-auto flex size-12 items-center justify-center rounded-full">
-                <Play className="size-5 translate-x-px fill-current" />
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <span className="flex size-12 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+                <Play className="size-6 fill-current" />
               </span>
-            )}
+            </span>
             {uploading && <ProgressRing progress={message.progress ?? 0} />}
           </span>
         )}
@@ -250,4 +261,4 @@ export function MessageBubble({ message, outgoing, myId, receipt, onOpen, onReac
       </span>
     </div>
   );
-}
+                        }
