@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Info, LogOut, X } from "lucide-react";
+import { Bell, BellOff, Info, LogOut, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
@@ -12,11 +12,14 @@ import {
   ATTRIBUTION,
   formatDayLabel,
   kindForFile,
+  previewFor,
   signedUrlFor,
   uploadRaw,
   type ChatMessage,
   type MessageKind,
 } from "@/lib/care-desk";
+import { currentPushEnabled, enablePush } from "@/lib/push";
+import { notifyPartner } from "@/lib/push.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -67,8 +70,18 @@ function Index() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  if (!ready) return <div className="min-h-dvh bg-background" />;
-  if (!session) return <AuthScreen />;
+  if (!ready) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-background">
+        <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen onAuthenticated={() => void 0} />;
+  }
+
   return <ChatRoom session={session} />;
 }
 
@@ -76,35 +89,85 @@ function ChatRoom({ session }: { session: Session }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lightbox, setLightbox] = useState<LightboxItem | null>(null);
   const [showInfo, setShowInfo] = useState(false);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [pushOn, setPushOn] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const userId = session.user.id;
   const email = session.user.email ?? "";
 
   useEffect(() => {
+    void currentPushEnabled().then(setPushOn);
+  }, []);
+
+  const scrollToBottom = (smooth = true) => {
+    bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "instant" });
+  };
+
+  useEffect(() => {
     let active = true;
-    void supabase
-      .from("messages")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(500)
-      .then(({ data }) => {
-        if (active && data) setMessages(data as ChatMessage[]);
-      });
+    (async () => {
+      const { data } = await supabase
+        .from("messages")
+        .select("*")
+        .order("created_at", { ascending: true })
+        .limit(300);
+      if (!active || !data) return;
+
+      const hydrated = await Promise.all(
+        data.map(async (row) => {
+          if (row.attachment_path && !row.attachment_url) {
+            const signed = await signedUrlFor(row.attachment_path);
+            return { ...(row as ChatMessage), attachment_url: signed };
+          }
+          return row as ChatMessage;
+        }),
+      );
+      if (active) {
+        setMessages(hydrated);
+        setTimeout(() => scrollToBottom(false), 80);
+
+        const unread = hydrated.filter((m) => m.sender_id !== userId && !m.read_at);
+        unread.forEach((m) => {
+          void supabase
+            .from("messages")
+            .update({ read_at: new Date().toISOString() } as never)
+            .eq("id", m.id);
+        });
+      }
+    })();
 
     const channel = supabase
-      .channel("care-desk-messages")
+      .channel("public:messages")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          const incoming = payload.new as ChatMessage;
+        async (payload) => {
+          const row = payload.new as ChatMessage;
+          if (row.sender_id === userId) return;
+
+          let full = row;
+          if (row.attachment_path && !row.attachment_url) {
+            const signed = await signedUrlFor(row.attachment_path);
+            full = { ...row, attachment_url: signed };
+          }
+
           setMessages((prev) => {
-            if (prev.some((m) => m.id === incoming.id)) return prev;
-            const withoutOptimistic = prev.filter(
-              (m) => !(m.pending && m.client_id && m.client_id === incoming.client_id),
-            );
-            return [...withoutOptimistic, incoming];
+            if (prev.some((m) => m.id === full.id)) return prev;
+            return [...prev, full];
           });
+          scrollToBottom(true);
+
+          void supabase
+            .from("messages")
+            .update({ read_at: new Date().toISOString() } as never)
+            .eq("id", full.id);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
+        (payload) => {
+          const updated = payload.new as ChatMessage;
+          setMessages((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
         },
       )
       .subscribe();
@@ -113,19 +176,8 @@ function ChatRoom({ session }: { session: Session }) {
       active = false;
       void supabase.removeChannel(channel);
     };
-  }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
-
-  const patch = useCallback((clientId: string, changes: Partial<ChatMessage>) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.client_id === clientId ? { ...m, ...changes } : m)),
-    );
-  }, []);
-
-  const insert = useCallback(
+  }, [userId]);
+      const insertMessage = useCallback(
     async (row: Partial<ChatMessage> & { client_id: string; kind: MessageKind }) => {
       const { data, error } = await supabase
         .from("messages")
@@ -133,89 +185,91 @@ function ChatRoom({ session }: { session: Session }) {
         .select()
         .single();
       if (error) {
-        patch(row.client_id, { pending: false, failed: true });
+        setMessages((prev) =>
+          prev.map((m) => (m.client_id === row.client_id ? { ...m, failed: true, pending: false } : m)),
+        );
         return;
       }
       setMessages((prev) =>
-        prev.map((m) =>
-          m.client_id === row.client_id
-            ? { ...(data as ChatMessage), localUrl: m.localUrl, pending: false }
-            : m,
-        ),
+        prev.map((m) => (m.client_id === row.client_id ? { ...(data as ChatMessage), pending: false } : m)),
       );
+      void notifyPartner({ data: { preview: previewFor(row.kind, row.body) } });
     },
-    [email, patch, userId],
+    [userId, email],
   );
 
-  const optimistic = (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
-    id: clientId,
-    sender_id: userId,
-    sender_email: email,
-    body: null,
-    kind: "text",
-    attachment_path: null,
-    attachment_url: null,
-    attachment_name: null,
-    attachment_type: null,
-    attachment_size: null,
-    duration_ms: null,
-    client_id: clientId,
-    created_at: new Date().toISOString(),
-    pending: true,
-    progress: 0,
-    ...partial,
-  });
-
-  const sendText = (body: string) => {
-    const clientId = crypto.randomUUID();
-    setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
-    void insert({ client_id: clientId, kind: "text", body });
+  const optimistic = (base: Partial<ChatMessage> & { kind: MessageKind }): ChatMessage => {
+    const client_id = `cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const msg: ChatMessage = {
+      id: client_id,
+      sender_id: userId,
+      sender_email: email,
+      body: base.body ?? null,
+      kind: base.kind,
+      attachment_path: base.attachment_path ?? null,
+      attachment_url: base.attachment_url ?? null,
+      attachment_name: base.attachment_name ?? null,
+      attachment_type: base.attachment_type ?? null,
+      attachment_size: base.attachment_size ?? null,
+      duration_ms: base.duration_ms ?? null,
+      client_id,
+      created_at: new Date().toISOString(),
+      pending: true,
+      progress: base.progress ?? 0,
+      localUrl: base.localUrl,
+    };
+    setMessages((prev) => [...prev, msg]);
+    scrollToBottom(true);
+    return msg;
   };
 
-  const sendBlob = useCallback(
-    async (blob: Blob, name: string, kind: MessageKind, durationMs?: number) => {
-      const clientId = crypto.randomUUID();
-      const localUrl = URL.createObjectURL(blob);
-      const safeName = name.replace(/[^\w.\-]+/g, "_");
-      const path = `${userId}/${clientId}-${safeName}`;
+  const sendText = (body: string) => {
+    const opt = optimistic({ kind: "text", body });
+    void insertMessage({ client_id: opt.client_id!, kind: "text", body });
+  };
 
-      setMessages((prev) => [
-        ...prev,
-        optimistic(
-          {
-            kind,
-            localUrl,
-            attachment_path: path,
-            attachment_name: name,
-            attachment_type: blob.type || null,
-            attachment_size: blob.size,
-            duration_ms: durationMs ?? null,
-          },
-          clientId,
-        ),
-      ]);
+  const sendBlob = async (
+    blob: Blob | File,
+    name: string,
+    kind: MessageKind,
+    durationMs?: number,
+  ) => {
+    const localUrl = URL.createObjectURL(blob);
+    const opt = optimistic({
+      kind,
+      attachment_name: name,
+      attachment_type: blob.type || "application/octet-stream",
+      attachment_size: blob.size,
+      duration_ms: durationMs ?? null,
+      localUrl,
+      progress: 5,
+    });
 
-      try {
-        await uploadRaw(path, blob, blob.type, (fraction) =>
-          patch(clientId, { progress: fraction }),
+    try {
+      const ext = name.includes(".") ? name.split(".").pop() : "";
+      const path = `${userId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext ? `.${ext}` : ""}`;
+      await uploadRaw(blob, path, (progress) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.client_id === opt.client_id ? { ...m, progress } : m)),
         );
-        const url = await signedUrlFor(path);
-        await insert({
-          client_id: clientId,
-          kind,
-          attachment_path: path,
-          attachment_url: url,
-          attachment_name: name,
-          attachment_type: blob.type || null,
-          attachment_size: blob.size,
-          duration_ms: durationMs ?? null,
-        });
-      } catch {
-        patch(clientId, { pending: false, failed: true });
-      }
-    },
-    [insert, patch, userId],
-  );
+      });
+      const signed = await signedUrlFor(path);
+      await insertMessage({
+        client_id: opt.client_id!,
+        kind,
+        attachment_path: path,
+        attachment_url: signed,
+        attachment_name: name,
+        attachment_type: blob.type || "application/octet-stream",
+        attachment_size: blob.size,
+        duration_ms: durationMs ?? null,
+      });
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) => (m.client_id === opt.client_id ? { ...m, failed: true, pending: false } : m)),
+      );
+    }
+  };
 
   const sendFiles = (files: File[]) => {
     files.forEach((file) => {
@@ -235,6 +289,11 @@ function ChatRoom({ session }: { session: Session }) {
     void supabase.from("messages").update({ reactions: next } as never).eq("id", message.id);
   };
 
+  const togglePush = async () => {
+    const status = await enablePush(userId);
+    setPushOn(status === "enabled");
+  };
+
   const grouped = useMemo(() => {
     const groups: { label: string; items: ChatMessage[] }[] = [];
     messages.forEach((message) => {
@@ -245,6 +304,13 @@ function ChatRoom({ session }: { session: Session }) {
     });
     return groups;
   }, [messages]);
+
+  const lastOutgoingIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.sender_id === userId) return i;
+    }
+    return -1;
+  }, [messages, userId]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -260,6 +326,14 @@ function ChatRoom({ session }: { session: Session }) {
           className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
         >
           <Info className="size-5" />
+        </button>
+        <button
+          type="button"
+          aria-label={pushOn ? "Notifications enabled" : "Enable notifications"}
+          onClick={() => void togglePush()}
+          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-transform active:scale-90"
+        >
+          {pushOn ? <Bell className="size-[18px] text-primary" /> : <BellOff className="size-[18px]" />}
         </button>
         <h1 className="flex-1 text-center text-[17px] font-semibold tracking-tight">
           Popotso Care Desk
@@ -286,16 +360,28 @@ function ChatRoom({ session }: { session: Session }) {
               <p className="my-3 text-center text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
                 {group.label}
               </p>
-              {group.items.map((message) => (
-                <MessageBubble
-                  key={message.client_id ?? message.id}
-                  message={message}
-                  outgoing={message.sender_id === userId}
-                  myId={userId}
-                  onOpen={setLightbox}
-                  onReact={react}
-                />
-              ))}
+              {group.items.map((message) => {
+                const isLastOutgoing =
+                  lastOutgoingIndex >= 0 && messages[lastOutgoingIndex]?.id === message.id;
+                const outgoing = message.sender_id === userId;
+                const receipt =
+                  outgoing && isLastOutgoing
+                    ? message.read_at
+                      ? "Read"
+                      : "Delivered"
+                    : null;
+                return (
+                  <MessageBubble
+                    key={message.client_id ?? message.id}
+                    message={message}
+                    outgoing={outgoing}
+                    myId={userId}
+                    receipt={receipt}
+                    onOpen={setLightbox}
+                    onReact={react}
+                  />
+                );
+              })}
             </div>
           ))}
           <div ref={bottomRef} />
@@ -332,4 +418,4 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-}
+        }
