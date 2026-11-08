@@ -108,8 +108,8 @@ function ChatRoom({ session }: { session: Session }) {
 
   const userId = session.user.id;
   const email = session.user.email ?? "";
-  const partnerEmail: MemberEmail =
-    email === "tim@popotso.app" ? "nicky@popotso.app" : "tim@popotso.app";
+  const isNicky = email === "nicky@popotso.app" || email === "mother@popotso.app";
+  const partnerEmail: MemberEmail = isNicky ? "tim@popotso.app" : "nicky@popotso.app";
 
   const markAsRead = useCallback(async () => {
     const now = new Date().toISOString();
@@ -179,7 +179,7 @@ function ChatRoom({ session }: { session: Session }) {
             return [...prev, row];
           });
           if (row.sender_id !== userId) {
-            haptic("tap");
+            haptic("light");
             void markAsRead();
           }
         },
@@ -192,13 +192,20 @@ function ChatRoom({ session }: { session: Session }) {
           const updated = payload.new as ChatMessage;
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === updated.id ? { ...m, reactions: updated.reactions, read_at: updated.read_at } : m,
+              m.id === updated.id
+                ? {
+                    ...m,
+                    reactions: updated.reactions ?? null,
+                    read_at: updated.read_at ?? null,
+                  }
+                : m,
             ),
           );
         },
       )
-      .on("broadcast", { event: "typing" }, (payload) => {
-        if (payload.payload?.senderId !== userId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .on("broadcast", { event: "typing" }, (payload: any) => {
+        if (payload?.payload?.senderId !== userId) {
           setPartnerTyping(true);
           if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
           typingTimerRef.current = setTimeout(() => setPartnerTyping(false), 2500);
@@ -216,10 +223,11 @@ function ChatRoom({ session }: { session: Session }) {
     const callChan = supabase.channel("care-desk-call-signaling", {
       config: { broadcast: { self: false } },
     });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     callChan
-      .on("broadcast", { event: "offer" }, ({ payload }) => {
+      .on("broadcast", { event: "offer" }, ({ payload }: any) => {
         if (payload?.targetEmail === email && payload?.sdp) {
-          haptic("notification");
+          haptic("medium");
           setIncomingCall({
             callerId: payload.callerId,
             callerName: payload.callerName,
@@ -290,7 +298,7 @@ function ChatRoom({ session }: { session: Session }) {
     progress: 0,
     ...partial,
   });
-        const sendText = (body: string) => {
+  const sendText = (body: string) => {
     const clientId = crypto.randomUUID();
     setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
     void insert({ client_id: clientId, kind: "text", body });
@@ -362,18 +370,20 @@ function ChatRoom({ session }: { session: Session }) {
     if (current[userId] === emoji) delete current[userId];
     else current[userId] = emoji;
 
-    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)));
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)),
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any).from("messages").update({ reactions: current }).eq("id", messageId);
   };
 
   const enableNotifications = async () => {
-    const res = await enablePush();
-    if (res.state === "subscribed") {
+    const res = await enablePush(userId);
+    if (res === "enabled") {
       setPushActive(true);
       haptic("success");
     } else {
-      alert(`Notification status: ${res.state}`);
+      alert(`Notification status: ${res}`);
     }
   };
 
@@ -391,10 +401,16 @@ function ChatRoom({ session }: { session: Session }) {
   const lastOutgoingIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (m && m.sender_id === userId && !m.pending && !m.failed) return i;
+      if (!m) continue;
+      const isMine =
+        m.sender_id === userId ||
+        m.sender_email === email ||
+        (isNicky &&
+          (m.sender_email === "nicky@popotso.app" || m.sender_email === "mother@popotso.app"));
+      if (isMine && !m.pending && !m.failed) return i;
     }
     return -1;
-  }, [messages, userId]);
+  }, [email, isNicky, messages, userId]);
 
   const lastOutgoingMessage = lastOutgoingIndex >= 0 ? messages[lastOutgoingIndex] : null;
 
@@ -422,12 +438,12 @@ function ChatRoom({ session }: { session: Session }) {
           <button
             type="button"
             onClick={() => {
-              haptic("tap");
+              haptic("light");
               setIncomingCall(null);
               setInCall(true);
             }}
             className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
-            aria-label="Call Nicky"
+            aria-label="Low-data audio call"
             title="Start low-data audio call"
           >
             <Phone className="size-4 text-primary" />
@@ -467,9 +483,12 @@ function ChatRoom({ session }: { session: Session }) {
 
             <div className="flex flex-col gap-2">
               {group.items.map((msg) => {
-                // Older messages may have a sender_id that no longer matches the
-                // current auth record; use the account handle as a safe display fallback.
-                const isMine = msg.sender_id === userId || msg.sender_email === email;
+                const isMine =
+                  msg.sender_id === userId ||
+                  msg.sender_email === email ||
+                  (isNicky &&
+                    (msg.sender_email === "nicky@popotso.app" ||
+                      msg.sender_email === "mother@popotso.app"));
                 const isLatest = lastOutgoingMessage?.id === msg.id;
                 let receipt: string | null = null;
                 if (isMine && isLatest) {
@@ -486,7 +505,7 @@ function ChatRoom({ session }: { session: Session }) {
                     receipt={receipt}
                     onOpenLightbox={(item) => setLightboxItem(item)}
                     onOpen={(item) => setLightboxItem(item)}
-                    onReact={react}
+                    onReact={(message, emoji) => void react(message.id, emoji ?? "")}
                   />
                 );
               })}
@@ -564,4 +583,5 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-}
+          }
+    
