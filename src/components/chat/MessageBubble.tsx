@@ -77,13 +77,6 @@ export function MessageBubble({
     onReact(message, mine === emoji ? null : emoji);
   };
 
-  // Hard colours so the difference is visible even if a CSS class is missing
-  const bubbleStyle = mediaOnly
-    ? undefined
-    : outgoing
-      ? { backgroundColor: "#0A84FF", color: "#FFFFFF" } // iOS blue
-      : { backgroundColor: "#E9E9EB", color: "#000000" }; // soft grey
-
   return (
     <div
       className={cn(
@@ -133,7 +126,6 @@ export function MessageBubble({
           if (longPressed.current) return;
           setShowTime((value) => !value);
         }}
-        style={bubbleStyle}
         className={cn(
           "relative max-w-[80%] animate-bubble-in cursor-pointer text-left select-none transition-transform duration-200 [-webkit-touch-callout:none] active:scale-[0.985]",
           picker && "scale-[1.03]",
@@ -251,13 +243,6 @@ export function MessageBubble({
                     : "bg-bubble-in text-bubble-in-foreground",
                 ),
             )}
-            style={
-              mediaOnly
-                ? outgoing
-                  ? { backgroundColor: "#0A84FF", color: "#FFFFFF" }
-                  : { backgroundColor: "#E9E9EB", color: "#000000" }
-                : undefined
-            }
           >
             {message.body}
           </span>

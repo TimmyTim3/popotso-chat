@@ -467,7 +467,9 @@ function ChatRoom({ session }: { session: Session }) {
 
             <div className="flex flex-col gap-2">
               {group.items.map((msg) => {
-                const isMine = msg.sender_id === userId;
+                // Older messages may have a sender_id that no longer matches the
+                // current auth record; use the account handle as a safe display fallback.
+                const isMine = msg.sender_id === userId || msg.sender_email === email;
                 const isLatest = lastOutgoingMessage?.id === msg.id;
                 let receipt: string | null = null;
                 if (isMine && isLatest) {

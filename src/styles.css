@@ -78,8 +78,8 @@
 
   --bubble-out: oklch(0.588 0.2 258);
   --bubble-out-foreground: oklch(1 0 0);
-  --bubble-in: oklch(0.938 0.004 265);
-  --bubble-in-foreground: oklch(0.16 0.005 265);
+  --bubble-in: oklch(0.93 0.06 165);
+  --bubble-in-foreground: oklch(0.2 0.04 175);
   --chrome: oklch(1 0 0 / 68%);
   --hairline: oklch(0.16 0.005 265 / 9%);
 }
@@ -109,8 +109,8 @@
 
   --bubble-out: oklch(0.62 0.196 258);
   --bubble-out-foreground: oklch(1 0 0);
-  --bubble-in: oklch(0.27 0.006 265);
-  --bubble-in-foreground: oklch(0.98 0.002 265);
+  --bubble-in: oklch(0.29 0.07 165);
+  --bubble-in-foreground: oklch(0.96 0.02 165);
   --chrome: oklch(0.145 0.004 265 / 66%);
   --hairline: oklch(1 0 0 / 10%);
 }
