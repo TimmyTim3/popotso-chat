@@ -6,7 +6,7 @@
 
 /*
  * Popotso Care Desk — iOS 18 inspired design system.
- * All colors are oklch semantic tokens. Never hardcode colors in components.
+ * Sent messages = vibrant iOS blue; Received messages = soft mint green.
  */
 
 @theme inline {
@@ -76,6 +76,7 @@
   --input: oklch(0.93 0.004 265);
   --ring: oklch(0.588 0.2 258);
 
+  /* Sent = Vibrant Blue, Received = Soft Mint Green */
   --bubble-out: oklch(0.588 0.2 258);
   --bubble-out-foreground: oklch(1 0 0);
   --bubble-in: oklch(0.93 0.06 165);
@@ -174,4 +175,4 @@
     opacity: 1;
     transform: translateY(0);
   }
-}
+    }
