@@ -28,6 +28,7 @@ export interface ChatMessage {
   duration_ms?: number | null;
   reactions?: Record<string, any> | null;
   read_at?: string | null;
+  reply_to_id?: string | null;
   created_at: string;
   edited_at?: string | null;
   pending?: boolean;
