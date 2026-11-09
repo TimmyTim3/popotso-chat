@@ -17,7 +17,9 @@ interface MessageBubbleProps {
   onSelectMedia?: (url: string, kind: "image" | "video") => void;
   onReact?: (emoji: string) => void;
   onRetry?: () => void;
-  onEdit?: (message: ChatMessage) => void;\n  onReply?: () => void;\n  replyPreview?: { sender: string; text: string } | null;
+  onEdit?: (message: ChatMessage) => void;
+  onReply?: () => void;
+  replyPreview?: { sender: string; text: string } | null;
   onCancelUpload?: (clientId: string) => void;
   partnerName?: string;
   isRead?: boolean;
@@ -30,6 +32,8 @@ export function MessageBubble({
   onReact,
   onRetry,
   onEdit,
+  onReply,
+  replyPreview,
   onCancelUpload,
   partnerName = "Partner",
   isRead = false,
@@ -39,7 +43,8 @@ export function MessageBubble({
   const [trayOpen, setTrayOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const longPressTimer = useRef<number | null>(null);
-  const longPressed = useRef(false);\n  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const longPressed = useRef(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef(0);
   const url = message.localUrl ?? message.attachment_url ?? "";
   const uploading = Boolean(message.pending && message.attachment_path);
@@ -106,7 +111,8 @@ export function MessageBubble({
   };
 
   // Double-tap sends a quick Heart reaction
-  const handleTouchStart = () => {
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStart.current = { x: e.changedTouches[0]?.clientX ?? 0, y: e.changedTouches[0]?.clientY ?? 0 };
     longPressed.current = false;
     longPressTimer.current = window.setTimeout(() => {
       longPressed.current = true;
@@ -114,7 +120,19 @@ export function MessageBubble({
     }, 450);
   };
 
-  const handleTouchEnd = () => {
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    const dx = (e.changedTouches[0]?.clientX ?? 0) - (start?.x ?? 0);
+    const dy = (e.changedTouches[0]?.clientY ?? 0) - (start?.y ?? 0);
+    if (dx > 58 && Math.abs(dx) > Math.abs(dy) * 1.25 && onReply && !message.pending && !message.failed) {
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+      longPressed.current = true;
+      haptic("light");
+      onReply();
+      return;
+    }
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
@@ -223,6 +241,16 @@ export function MessageBubble({
 
           {/* Action Row */}
           <div className="flex items-center gap-1 pt-0.5">
+            {onReply && !message.pending && !message.failed && (
+              <button
+                type="button"
+                onClick={() => { closeMenu(); onReply(); }}
+                className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary"
+              >
+                <span>↩</span><span>Reply</span>
+              </button>
+            )}
+
             {message.body && (
               <button
                 type="button"
@@ -269,6 +297,7 @@ export function MessageBubble({
         onClick={handleBubbleClick}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
         onContextMenu={handleContextMenu}
         className={`relative max-w-[82%] select-text overflow-visible rounded-[20px] transition active:scale-[0.99] ${
           groupedReactions.length > 0 ? "mt-2.5" : ""
@@ -301,6 +330,13 @@ export function MessageBubble({
                 )}
               </span>
             ))}
+          </div>
+        )}
+
+        {replyPreview && (
+          <div className="mb-2 rounded-xl border-l-[3px] border-primary bg-black/5 px-2.5 py-1.5 text-xs dark:bg-white/10">
+            <p className="font-semibold text-primary">{replyPreview.sender}</p>
+            <p className="line-clamp-2 opacity-80">{replyPreview.text}</p>
           </div>
         )}
 
