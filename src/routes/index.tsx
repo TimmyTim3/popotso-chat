@@ -75,7 +75,10 @@ function ChatIndex() {
     );
   }
 
-  if (!session) return <AuthScreen />;
+  if (!session) {
+    return <AuthScreen onSignedIn={() => {}} />;
+  }
+
   return <ChatRoom session={session} />;
 }
 
@@ -260,222 +263,237 @@ function ChatRoom({ session }: { session: Session }) {
     };
   }, [email, markPartnerAsRead, userId]);
 
-  const patch = useCallback((clientId: string, updates: Partial<ChatMessage>) => {
+  const patch = (clientId: string, updates: Partial<ChatMessage>) => {
     setMessages((prev) =>
       prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...updates } : m)),
     );
-  }, []);
+  };
 
   const handleCancelUpload = useCallback((clientId: string) => {
-    haptic("light");
     const controller = uploadControllers.current.get(clientId);
     if (controller) {
       controller.abort();
       uploadControllers.current.delete(clientId);
     }
-    setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+    deleteOutbox(clientId);
     void deleteBlob(clientId);
-    void deleteOutbox(clientId);
+    setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+    haptic("light");
   }, []);
 
-  const optimistic = useCallback(
-    (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
+  const insert = async (row: Partial<ChatMessage> & { client_id: string }) => {
+    const clientId = row.client_id;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
+        .from("messages")
+        .insert({
+          client_id: clientId,
+          sender_id: userId,
+          sender_email: email,
+          body: row.body ?? null,
+          kind: row.kind,
+          attachment_path: row.attachment_path ?? null,
+          attachment_url: row.attachment_url ?? null,
+          attachment_name: row.attachment_name ?? null,
+          attachment_type: row.attachment_type ?? null,
+          attachment_size: row.attachment_size ?? null,
+          duration_ms: row.duration_ms ?? null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      deleteOutbox(clientId);
+      void deleteBlob(clientId);
+
+      setMessages((prev) =>
+        prev.map((m) => (m.client_id === clientId ? { ...m, ...data, pending: false, failed: false } : m)),
+      );
+
+      void notifyPartner({
+        recipientEmail: partnerEmail,
+        senderName: isNicky ? "Mother" : "Father",
+        preview: previewFor(row.kind ?? "text", row.body ?? null),
+      });
+    } catch {
+      patch(clientId, { failed: true, pending: false });
+      putOutbox({
+        id: clientId,
+        client_id: clientId,
+        sender_id: userId,
+        sender_email: email,
+        body: row.body ?? null,
+        kind: row.kind ?? "text",
+        attachment_path: row.attachment_path ?? null,
+        attachment_url: row.attachment_url ?? null,
+        attachment_name: row.attachment_name ?? null,
+        attachment_type: row.attachment_type ?? null,
+        attachment_size: row.attachment_size ?? null,
+        duration_ms: row.duration_ms ?? null,
+        created_at: new Date().toISOString(),
+        pending: false,
+        failed: true,
+      });
+      haptic("error");
+    }
+  };
+
+  const uploadAndSend = async (
+    blob: Blob,
+    kind: "image" | "video" | "audio" | "document",
+    name: string,
+    durationMs?: number,
+  ) => {
+    const clientId = crypto.randomUUID();
+    const ext = name.includes(".") ? name.split(".").pop() : "";
+    const path = `${userId}/${Date.now()}-${crypto.randomUUID()}${ext ? `.${ext}` : ""}`;
+    const localUrl = URL.createObjectURL(blob);
+
+    void putBlob(clientId, blob);
+
+    const optimistic: ChatMessage = {
       id: clientId,
       client_id: clientId,
       sender_id: userId,
       sender_email: email,
       body: null,
-      kind: "text",
-      attachment_path: null,
-      attachment_url: null,
-      attachment_name: null,
-      attachment_type: null,
-      attachment_size: null,
-      duration_ms: null,
-      reactions: {},
+      kind,
+      attachment_path: path,
+      attachment_name: name,
+      attachment_type: blob.type,
+      attachment_size: blob.size,
+      duration_ms: durationMs ?? null,
+      localUrl,
       created_at: new Date().toISOString(),
       pending: true,
-      progress: 0,
       failed: false,
-      ...partial,
-    }),
-    [email, userId],
-  );
+      progress: 0,
+    };
 
-  const insert = useCallback(
-    async (row: any, blobToCache?: Blob) => {
-      const clientId = row.client_id;
-      if (blobToCache && clientId) {
-        await putBlob(clientId, blobToCache);
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase as any)
-        .from("messages")
-        .insert({
-          sender_id: userId,
-          sender_email: email,
-          ...row,
-        })
-        .select()
-        .single();
+    putOutbox(optimistic);
 
-      if (error) {
-        console.error("Database insert failed", error);
-        patch(clientId, { failed: true, pending: false });
-        await putOutbox({
+    setMessages((prev) => {
+      const item: ChatMessage = Object.assign(
+        {
           id: clientId,
           client_id: clientId,
           sender_id: userId,
           sender_email: email,
-          ...row,
+          localUrl,
           created_at: new Date().toISOString(),
-          failed: true,
-          pending: false,
-        });
-        return;
-      }
-
-      patch(clientId, { ...data, pending: false, failed: false });
-      await deleteOutbox(clientId);
-      if (clientId) await deleteBlob(clientId);
-
-      void notifyPartner({
-        data: {
-          preview: previewFor(row.kind, row.body),
-          title: isNicky ? "Mother" : "Father",
-          type: "message",
-        },
-      }).catch(() => {});
-    },
-    [email, isNicky, patch, userId],
-  );
-          const sendBlob = useCallback(
-    async (
-      blob: Blob,
-      kind: "image" | "video" | "audio" | "document",
-      name: string,
-      durationMs?: number,
-    ) => {
-      const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const ext = name.split(".").pop() || "bin";
-      const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const localUrl = URL.createObjectURL(blob);
-
-      setMessages((prev) => {
-        const item = optimistic(
-          {
-            kind,
-            localUrl,
-            attachment_path: path,
-            attachment_name: name,
-            attachment_type: blob.type,
-            attachment_size: blob.size,
-            duration_ms: durationMs ?? null,
-            progress: 0,
-            pending: true,
-            failed: false,
-          },
-          clientId,
-        );
-        return [...prev, item];
-      });
-
-      const controller = new AbortController();
-      uploadControllers.current.set(clientId, controller);
-
-      try {
-        await uploadRaw(
-          path,
-          blob,
-          blob.type,
-          (fraction) => {
-            patch(clientId, { progress: fraction });
-          },
-          controller.signal,
-        );
-        uploadControllers.current.delete(clientId);
-        const url = await signedUrlFor(path);
-        patch(clientId, { attachment_url: url, progress: 1 });
-        await insert(
-          {
-            client_id: clientId,
-            kind,
-            attachment_path: path,
-            attachment_url: url,
-            attachment_name: name,
-            attachment_type: blob.type,
-            attachment_size: blob.size,
-            duration_ms: durationMs ?? null,
-          },
-          blob,
-        );
-      } catch (e: any) {
-        uploadControllers.current.delete(clientId);
-        if (e?.name === "AbortError") {
-          setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
-          void deleteBlob(clientId);
-          void deleteOutbox(clientId);
-          return;
-        }
-        console.error("Upload failed", e);
-        patch(clientId, { failed: true, pending: false });
-        putOutbox({
-          id: clientId,
-          client_id: clientId,
-          sender_id: userId,
-          sender_email: email,
-          body: null,
           kind,
+          body: null,
           attachment_path: path,
-          attachment_url: null,
           attachment_name: name,
           attachment_type: blob.type,
           attachment_size: blob.size,
           duration_ms: durationMs ?? null,
-          created_at: new Date().toISOString(),
-          failed: true,
-          pending: false,
-        });
-      }
-    },
-    [email, insert, optimistic, patch, userId],
-  );
-
-  const sendFiles = (files: FileList | File[]) => {
-    Array.from(files).forEach((file) => {
-      const type = file.type;
-      let kind: "image" | "video" | "audio" | "document" = "document";
-      if (type.startsWith("image/")) kind = "image";
-      else if (type.startsWith("video/")) kind = "video";
-      else if (type.startsWith("audio/")) kind = "audio";
-      void sendBlob(file, kind, file.name);
+          progress: 0,
+          pending: true,
+          failed: false,
+        },
+        clientId,
+      );
+      return [...prev, item];
     });
+
+    const controller = new AbortController();
+    uploadControllers.current.set(clientId, controller);
+        try {
+      await uploadRaw(
+        path,
+        blob,
+        blob.type,
+        (fraction) => {
+          patch(clientId, { progress: fraction });
+        },
+        controller.signal,
+      );
+      uploadControllers.current.delete(clientId);
+      const url = await signedUrlFor(path);
+      patch(clientId, { attachment_url: url, progress: 1 });
+      await insert(
+        {
+          client_id: clientId,
+          kind,
+          attachment_path: path,
+          attachment_url: url,
+          attachment_name: name,
+          attachment_type: blob.type,
+          attachment_size: blob.size,
+          duration_ms: durationMs ?? null,
+        },
+      );
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+        deleteOutbox(clientId);
+        void deleteBlob(clientId);
+        return;
+      }
+      patch(clientId, { failed: true, pending: false });
+      putOutbox({
+        id: clientId,
+        client_id: clientId,
+        sender_id: userId,
+        sender_email: email,
+        body: null,
+        kind,
+        attachment_path: path,
+        attachment_name: name,
+        attachment_type: blob.type,
+        attachment_size: blob.size,
+        duration_ms: durationMs ?? null,
+        created_at: new Date().toISOString(),
+        pending: false,
+        failed: true,
+      });
+      haptic("error");
+    } finally {
+      uploadControllers.current.delete(clientId);
+    }
   };
 
   const handleSendText = async (text: string) => {
-    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setMessages((prev) => [...prev, optimistic({ body: text, kind: "text", pending: true }, clientId)]);
+    const clientId = crypto.randomUUID();
+    const optimistic: ChatMessage = {
+      id: clientId,
+      client_id: clientId,
+      sender_id: userId,
+      sender_email: email,
+      body: text,
+      kind: "text",
+      created_at: new Date().toISOString(),
+      pending: true,
+      failed: false,
+    };
+
+    putOutbox(optimistic);
+    setMessages((prev) => [...prev, optimistic]);
     await insert({ client_id: clientId, kind: "text", body: text });
   };
 
-  const handleRetry = useCallback(
-    async (msg: ChatMessage) => {
-      const clientId = msg.client_id || msg.id;
-      if (msg.kind === "text" && msg.body) {
-        patch(clientId, { pending: true, failed: false });
-        await insert({ client_id: clientId, kind: "text", body: msg.body });
-      } else if (msg.kind !== "text") {
-        patch(clientId, { pending: true, failed: false, progress: 0 });
-        const blob = await getBlob(clientId);
-        if (blob && msg.attachment_name) {
-          await sendBlob(blob, msg.kind, msg.attachment_name, msg.duration_ms ?? undefined);
-        } else {
-          alert("Media file is no longer available in cache to retry. Please select and send it again.");
-        }
+  const handleRetry = async (msg: ChatMessage) => {
+    const clientId = msg.client_id || msg.id;
+    patch(clientId, { failed: false, pending: true });
+    if (msg.kind === "text" && msg.body) {
+      await insert({ client_id: clientId, kind: "text", body: msg.body });
+    } else {
+      const cached = await getBlob(clientId);
+      if (cached) {
+        await uploadAndSend(
+          cached,
+          msg.kind as any,
+          msg.attachment_name ?? "file",
+          msg.duration_ms ?? undefined,
+        );
+      } else {
+        patch(clientId, { failed: true, pending: false });
       }
-    },
-    [insert, patch, sendBlob],
-  );
+    }
+  };
 
   const handleEdit = useCallback((msg: ChatMessage) => {
     setEditingMessage(msg);
@@ -483,18 +501,19 @@ function ChatRoom({ session }: { session: Session }) {
 
   const handleSaveEdit = useCallback(
     async (id: string, newText: string) => {
+      setEditingMessage(null);
+      const now = new Date().toISOString();
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id || m.client_id === id
-            ? { ...m, body: newText, edited_at: new Date().toISOString() }
+            ? { ...m, body: newText, edited_at: now }
             : m,
         ),
       );
-      setEditingMessage(null);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (supabase as any)
         .from("messages")
-        .update({ body: newText, edited_at: new Date().toISOString() })
+        .update({ body: newText, edited_at: now })
         .eq("id", id);
       haptic("light");
     },
@@ -510,16 +529,14 @@ function ChatRoom({ session }: { session: Session }) {
     if (!msg) return;
 
     const current = { ...(msg.reactions ?? {}) };
-    const senders = new Set(current[emoji] ?? []);
-
-    if (senders.has(userId)) senders.delete(userId);
-    else senders.add(userId);
-
-    if (senders.size === 0) delete current[emoji];
-    else current[emoji] = Array.from(senders);
+    if (current[userId] === emoji) {
+      delete current[userId];
+    } else {
+      current[userId] = emoji;
+    }
 
     setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)),
+      prev.map((m) => (m.id === messageId || m.client_id === messageId ? { ...m, reactions: current } : m)),
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any).from("messages").update({ reactions: current }).eq("id", messageId);
@@ -535,98 +552,108 @@ function ChatRoom({ session }: { session: Session }) {
     }
   };
 
-  const startCall = (withVideo: boolean) => {
-    haptic("light");
-    setIncomingCall(null);
-    setCallWithVideo(withVideo);
+  const startCall = (video: boolean) => {
+    setCallWithVideo(video);
     setInCall(true);
-    void notifyPartner({
-      data: {
-        title: "Popotso Incoming Call",
-        preview: `📞 ${withVideo ? "Video" : "Voice"} call from ${isNicky ? "Mother" : "Father"}`,
-        type: "call",
-      },
-    }).catch(() => {});
+    haptic("medium");
   };
 
+  const handleBroadcastTyping = () => {
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "typing",
+      payload: { email, name: isNicky ? "Mother" : "Father" },
+    });
+  };
+
+  // Group messages chronologically by day label
   const grouped = useMemo(() => {
     const groups: { label: string; items: ChatMessage[] }[] = [];
-    messages.forEach((msg) => {
+    let currentLabel = "";
+    let currentGroup: ChatMessage[] = [];
+
+    for (const msg of messages) {
       const label = formatDayLabel(msg.created_at);
-      const last = groups[groups.length - 1];
-      if (last && last.label === label) last.items.push(msg);
-      else groups.push({ label, items: [msg] });
-    });
+      if (label !== currentLabel) {
+        if (currentGroup.length) groups.push({ label: currentLabel, items: currentGroup });
+        currentLabel = label;
+        currentGroup = [msg];
+      } else {
+        currentGroup.push(msg);
+      }
+    }
+    if (currentGroup.length) groups.push({ label: currentLabel, items: currentGroup });
     return groups;
   }, [messages]);
 
   const lastOutgoingIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m && (m.sender_id === userId || m.sender_email === email)) return i;
+      const msg = messages[i];
+      if (msg && (msg.sender_id === userId || msg.sender_email === email)) {
+        return i;
+      }
     }
     return -1;
   }, [messages, userId, email]);
 
   const partnerHasRead = useMemo(() => {
-    return messages.some(
-      (m) =>
-        m.sender_id !== userId &&
-        (m.sender_email === "nicky@popotso.app" || m.sender_email === "mother@popotso.app"),
-    );
+    const partnerMessages = messages.filter((m) => m.sender_id !== userId);
+    if (!partnerMessages.length) return false;
+    return true;
   }, [messages, userId]);
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      {/* Top Header Bar */}
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
+    <div className="flex h-dvh flex-col bg-background font-sans text-foreground">
+      {/* Top Glass Header */}
+      <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowAttribution(true)}
-            className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary"
-            aria-label="App info"
+            onClick={() => setShowAttribution((prev) => !prev)}
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="System info"
           >
             <Info className="size-4" />
           </button>
-          <div>
-            <h1 className="text-[17px] font-semibold tracking-tight">Popotso Care Desk</h1>
-            <p className="text-[11px] text-muted-foreground">Private Line</p>
+          <div className="flex flex-col">
+            <h1 className="text-sm font-semibold tracking-tight">Popotso Care Desk</h1>
+            <span className="text-[11px] text-muted-foreground">Private Line</span>
           </div>
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Low-Data Audio Call */}
+          {/* Audio Call */}
           <button
             type="button"
             onClick={() => startCall(false)}
-            className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
-            aria-label="Low-data audio call"
-            title="Start low-data audio call (~9MB/hr)"
+            className="flex size-9 items-center justify-center rounded-full text-primary transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Start low-data audio call"
           >
-            <Phone className="size-4 text-primary" />
+            <Phone className="size-4" />
           </button>
 
-          {/* HD Balanced Video Call */}
+          {/* Video Call */}
           <button
             type="button"
             onClick={() => startCall(true)}
-            className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
-            aria-label="HD balanced video call"
-            title="Start HD video call (~160MB/hr)"
+            className="flex size-9 items-center justify-center rounded-full text-primary transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Start balanced video call"
           >
-            <Video className="size-4 text-primary" />
+            <Video className="size-4" />
           </button>
 
-          {/* Notification Alert Bell */}
+          {/* Web Push Notifications Toggle */}
           <button
             type="button"
             onClick={enableNotifications}
-            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            className={`flex size-9 items-center justify-center rounded-full transition-colors active:scale-95 ${
+              pushActive
+                ? "text-primary hover:bg-secondary"
+                : "text-muted-foreground hover:bg-secondary"
+            }`}
             aria-label="Enable notifications"
-            title={pushActive ? "Push alerts enabled" : "Turn on push notifications"}
           >
-            {pushActive ? <BellRing className="size-4 text-primary" /> : <Bell className="size-4" />}
+            {pushActive ? <BellRing className="size-4" /> : <Bell className="size-4" />}
           </button>
 
           <button
@@ -684,17 +711,15 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Composer Input Area */}
       <Composer
         onSendText={handleSendText}
-        onSendFiles={sendFiles}
-        onSendVoice={(blob, duration) =>
-          sendBlob(blob, "audio", `voicenote.${audioExtension(pickAudioMime())}`, duration)
-        }
-        onTyping={() => {
-          void channelRef.current?.send({
-            type: "broadcast",
-            event: "typing",
-            payload: { email, name: isNicky ? "Mother" : "Father" },
-          });
+        onSendMedia={async (file, kind) => {
+          await uploadAndSend(file, kind, file.name);
         }}
+        onSendAudio={async (blob, durationMs) => {
+          const mime = pickAudioMime();
+          const ext = audioExtension(mime);
+          await uploadAndSend(blob, "audio", `voice-note-${Date.now()}.${ext}`, durationMs);
+        }}
+        onTyping={handleBroadcastTyping}
         editing={editingMessage ? { id: editingMessage.id, text: editingMessage.body ?? "" } : null}
         onSaveEdit={handleSaveEdit}
         onCancelEdit={handleCancelEdit}
@@ -711,50 +736,48 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Low-Data Voice & Video Call Modal */}
       {(inCall || incomingCall) && channelRef.current && (
         <VoiceCallModal
-          myId={userId}
-          myEmail={email}
-          partnerEmail={partnerEmail}
-          channel={channelRef.current}
-          incomingCall={incomingCall}
-          initialVideo={callWithVideo}
+          isOpen={inCall || Boolean(incomingCall)}
           onClose={() => {
             setInCall(false);
             setIncomingCall(null);
           }}
+          partnerName={partnerName}
+          isOutgoing={inCall && !incomingCall}
+          channel={channelRef.current}
+          userId={userId}
+          enableVideo={callWithVideo}
+          incomingOffer={incomingCall?.sdp}
         />
       )}
 
-      {/* System Attribution Modal */}
+      {/* Technical Attribution Modal */}
       {showAttribution && (
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
           onClick={() => setShowAttribution(false)}
         >
           <div
-            className="w-full max-w-sm rounded-2xl border border-border/80 bg-popover p-5 shadow-2xl"
+            className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+            <div className="flex items-center justify-between pb-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 System Attribution
-              </h2>
+              </span>
               <button
                 type="button"
                 onClick={() => setShowAttribution(false)}
-                className="flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary"
-                aria-label="Close"
+                className="rounded-full p-1 text-muted-foreground hover:bg-secondary"
               >
                 <X className="size-4" />
               </button>
             </div>
-            <p className="text-[13.5px] leading-relaxed text-muted-foreground">
-              {ATTRIBUTION}
-            </p>
+            <p className="text-xs leading-relaxed text-foreground/90">{ATTRIBUTION}</p>
           </div>
         </div>
       )}
     </div>
   );
-                   }
+    }
