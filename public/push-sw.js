@@ -11,6 +11,8 @@ self.addEventListener("push", (event) => {
   }
 
   const isCall = data.type === "call";
+  const isGame = data.type === "game";
+  const challengeId = data.challengeId || "";
   const title = data.title || (isCall ? "📞 Popotso Incoming Call" : "Popotso Care Desk");
 
   event.waitUntil(
@@ -24,7 +26,7 @@ self.addEventListener("push", (event) => {
         body: data.body || (isCall ? "Tap to answer call" : "New message"),
         icon: "/icon-192.png",
         badge: "/icon-192.png",
-        tag: isCall ? "popotso-call" : "care-desk",
+        tag: isCall ? "popotso-call" : isGame ? `popotso-game-${challengeId}` : "care-desk",
         renotify: true,
         silent: false,
         requireInteraction: isCall,
@@ -32,7 +34,8 @@ self.addEventListener("push", (event) => {
         vibrate: isCall
           ? [500, 200, 500, 200, 500, 200, 800, 500, 200, 500]
           : [100, 50, 100],
-        data: { url: "/", isCall },
+        actions: isGame ? [{ action: "ready-to-join", title: "Ready to join" }] : [],
+        data: { url: isGame && challengeId ? `/?gameChallenge=${encodeURIComponent(challengeId)}` : "/", isCall, isGame, challengeId },
       });
     })(),
   );
@@ -42,11 +45,15 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(
     (async () => {
+      const targetUrl = event.notification.data?.url || "/";
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of windows) {
-        if ("focus" in client) return client.focus();
+        if ("focus" in client) {
+          if ("navigate" in client) await client.navigate(targetUrl);
+          return client.focus();
+        }
       }
-      return self.clients.openWindow("/");
+      return self.clients.openWindow(targetUrl);
     })(),
   );
 });
