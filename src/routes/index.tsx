@@ -587,20 +587,7 @@ function ChatRoom({ session }: { session: Session }) {
     }
   };
 
-  const lastOutgoingIndex = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg && (msg.sender_id === userId || msg.sender_email === email)) {
-        return i;
-      }
-    }
-    return -1;
-  }, [messages, userId, email]);
 
-  const partnerHasRead = useMemo(() => {
-    const lastOutgoing = lastOutgoingIndex >= 0 ? messages[lastOutgoingIndex] : null;
-    return Boolean(lastOutgoing?.read_at);
-  }, [messages, lastOutgoingIndex]);
 
   return (
     <div className="flex h-dvh flex-col bg-background font-sans text-foreground">
@@ -710,7 +697,7 @@ function ChatRoom({ session }: { session: Session }) {
                   message={msg}
                   outgoing={outgoing}
                   partnerName={partnerName}
-                  isRead={isLastOutgoing && partnerHasRead}
+                  isRead={Boolean(msg.read_at)}
                   onSelectMedia={(url, kind) => setLightbox({ url, kind })}
                   onReact={(emoji) => handleReaction(msg.id, emoji)}
                   onReply={() => setReplyTarget(msg)}
