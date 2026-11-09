@@ -114,7 +114,7 @@ function ChatRoom({ session }: { session: Session }) {
   const email = (session.user.email ?? "") as MemberEmail;
   const isNicky = email === "nicky@popotso.app" || email === "mother@popotso.app";
   const partnerEmail: MemberEmail = isNicky ? "tim@popotso.app" : "nicky@popotso.app";
-  const partnerName = isNicky ? "Father" : "Mother";
+  const partnerName = isNicky ? "Tim" : "Mother";
 
   const markPartnerAsRead = useCallback(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
