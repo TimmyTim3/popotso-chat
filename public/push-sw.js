@@ -29,7 +29,7 @@ self.addEventListener("push", (event) => {
         tag: isCall ? "popotso-call" : isGame ? `popotso-game-${challengeId}` : "care-desk",
         renotify: true,
         silent: false,
-        requireInteraction: isCall,
+        requireInteraction: isCall || isGame,
         // Realistic ringing cadence vibration: buzz-buzz-buzz... buzz-buzz-buzz
         vibrate: isCall
           ? [500, 200, 500, 200, 500, 200, 800, 500, 200, 500]
