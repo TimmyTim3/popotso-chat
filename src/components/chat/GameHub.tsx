@@ -160,9 +160,9 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     } else if (active?.opponent_id) {
       turnId = active.opponent_id;
     } else if (!active) {
-      choices.ai = ["rock", "paper", "scissors"][Math.floor(Math.random() * 3)] ?? "rock";
+      choices["ai"] = ["rock", "paper", "scissors"][Math.floor(Math.random() * 3)] ?? "rock";
       const a = choices[userId];
-      const b = choices.ai;
+      const b = choices["ai"];
       winner = a === b ? "draw" :
         (a === "rock" && b === "scissors") ||
         (a === "paper" && b === "rock") ||
@@ -228,7 +228,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {active?.status==="active" && <p className="mb-3 text-center text-sm text-muted-foreground">{isMyTurn?"Your turn!":"Waiting for the other player…"}</p>}
             {game==="tic-tac-toe" && <div className="mx-auto grid max-w-[300px] grid-cols-3 gap-2">{(current?.board??[]).map((v:string,i:number)=><button key={i} disabled={!isMyTurn||Boolean(v)||Boolean(current?.winner)||waiting} onClick={()=>void playTtt(i)} className="aspect-square rounded-2xl border border-border bg-card text-4xl font-bold">{v}</button>)}</div>}
             {game==="connect-four" && <div className="mx-auto grid max-w-[340px] grid-cols-7 gap-1 rounded-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><button key={r+"-"+c} onClick={()=>void playConnect(c)} disabled={!isMyTurn||Boolean(current?.winner)||waiting} className={`aspect-square rounded-full border border-blue-800 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"}`}/>))}</div>}
-            {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{[["rock","✊"],["paper","✋"],["scissors","✌️"]].map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
+            {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
             {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><p className="my-4 text-2xl font-black tracking-[0.3em]">{current?.scrambled??"HNSIUNES"}</p><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button disabled={waiting || Boolean(active && userId === active.challenger_id) || Boolean(current?.winner)} onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
             {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><p className="font-semibold">{QUIZ[(current?.question??0)%QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.question??0)%QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div></div>}
             {current?.winner && <div className="mt-4 rounded-2xl bg-primary/10 p-4 text-center"><Trophy className="mx-auto mb-1 size-6 text-primary"/><p className="font-bold">{current.winner==="draw"?"It's a draw!":current.winner==="X"?"X wins!":current.winner==="O"?"O wins!":current.winner}</p></div>}
