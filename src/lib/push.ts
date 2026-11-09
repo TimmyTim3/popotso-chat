@@ -50,14 +50,32 @@ export async function enablePush(userId: string): Promise<PushStatus> {
   }
 
   try {
-    const reg = await navigator.serviceWorker.register("/push-sw.js");
+    const reg = await navigator.serviceWorker.register("/push-sw.js", { scope: "/" });
     await navigator.serviceWorker.ready;
-    const sub =
-      (await reg.pushManager.getSubscription()) ??
-      (await reg.pushManager.subscribe({
+
+    // Check for existing subscription first
+    let sub = await reg.pushManager.getSubscription();
+
+    // If an existing subscription is invalid or has wrong key, reset it
+    if (sub) {
+      try {
+        const json = sub.toJSON();
+        if (!json.keys?.["p256dh"] || !json.keys?.["auth"]) {
+          await sub.unsubscribe();
+          sub = null;
+        }
+      } catch {
+        sub = null;
+      }
+    }
+
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: toUint8(VAPID_PUBLIC_KEY),
-      }));
+      });
+    }
+
     const json = sub.toJSON();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any).from("push_subscriptions").upsert(
@@ -69,9 +87,18 @@ export async function enablePush(userId: string): Promise<PushStatus> {
       },
       { onConflict: "endpoint" },
     );
-    if (error) return "error";
+
+    if (error) {
+      console.error("Database save failed:", error);
+      alert(`Database notification error: ${error.message}`);
+      return "error";
+    }
+
     return "enabled";
-  } catch {
+  } catch (err: any) {
+    console.error("Push enable failed:", err);
+    alert(`Notification registration details:\n${err?.name || "Error"}: ${err?.message || err}`);
     return "error";
   }
 }
+  
