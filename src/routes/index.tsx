@@ -687,8 +687,6 @@ function ChatRoom({ session }: { session: Session }) {
               </span>
             </div>
             {group.items.map((msg) => {
-              const globalIndex = messages.findIndex((m) => m.id === msg.id);
-              const isLastOutgoing = globalIndex === lastOutgoingIndex;
               const outgoing = msg.sender_id === userId || msg.sender_email === email;
 
               return (
