@@ -44,7 +44,8 @@ const initialState = (game: GameType, first: string): GameState => ({
 const winnerTtt = (b: string[]) => {
   const lines: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
   for (const [a, c, d] of lines) {
-    if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a] ?? null;
+    const mark = b[a];
+    if (mark && mark === b[c] && mark === b[d]) return mark;
   }
   return b.every(Boolean) ? "draw" : null;
 };
@@ -142,18 +143,35 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
   const chooseRps = async (choice: string) => {
-    if(!current || current.choices?.[userId]) return;
-    if (active && !isMyTurn) return;
-    const choices={...(current.choices??{}),[userId]:choice};
+    if (!current || current.choices?.[userId] || (active && !isMyTurn)) return;
+    const choices = { ...(current.choices ?? {}), [userId]: choice };
     let winnerId: string | null | undefined;
     let winner = "";
-    if(active?.opponent_id && choices[active.challenger_id] && choices[active.opponent_id]) {
-      const a=choices[active.challenger_id], b=choices[active.opponent_id];
-      winner = a===b ? "draw" : (a==="rock"&&b==="scissors")||(a==="paper"&&b==="rock")||(a==="scissors"&&b==="paper") ? "X" : "O";
-      winnerId=winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id;
-    } else if(active?.opponent_id) { current.turnId = active.opponent_id; } else if(!active) { choices.ai=["rock","paper","scissors"][Math.floor(Math.random()*3)]; const a=choices[userId],b=choices.ai; winner=a===b?"draw":(a==="rock"&&b==="scissors")||(a==="paper"&&b==="rock")||(a==="scissors"&&b==="paper")?"You win!":"Computer wins"; }
-    const next={...current,choices,winner,turnId: active?.opponent_id && !winner ? active.opponent_id : current.turnId};
-    if(active) await updateGame(next,winnerId); else setSoloState(next);
+    let turnId = current.turnId;
+
+    if (active?.opponent_id && choices[active.challenger_id] && choices[active.opponent_id]) {
+      const a = choices[active.challenger_id];
+      const b = choices[active.opponent_id];
+      winner = a === b ? "draw" :
+        (a === "rock" && b === "scissors") ||
+        (a === "paper" && b === "rock") ||
+        (a === "scissors" && b === "paper") ? "X" : "O";
+      winnerId = winner === "draw" ? null : winner === "X" ? active.challenger_id : active.opponent_id;
+    } else if (active?.opponent_id) {
+      turnId = active.opponent_id;
+    } else if (!active) {
+      choices.ai = ["rock", "paper", "scissors"][Math.floor(Math.random() * 3)] ?? "rock";
+      const a = choices[userId];
+      const b = choices.ai;
+      winner = a === b ? "draw" :
+        (a === "rock" && b === "scissors") ||
+        (a === "paper" && b === "rock") ||
+        (a === "scissors" && b === "paper") ? "You win!" : "Computer wins";
+    }
+
+    const next = { ...current, choices, winner, turnId };
+    if (active) await updateGame(next, winnerId);
+    else setSoloState(next);
   };
   const submitWord = async () => {
     if(!current || (active && userId === active.challenger_id) || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
@@ -164,7 +182,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const submitQuiz = async (index: number) => {
     if(!current || current.answers?.[userId]!==undefined || (active && !isMyTurn)) return;
     const q=QUIZ[current.question%QUIZ.length]!; const answers={...(current.answers??{}),[userId]:index===q.correct};
-    const next={...current,answers};
+    const next={...current,answers,turnId: active?.opponent_id ?? current.turnId};
     if(active?.opponent_id && answers[active.challenger_id]!==undefined && answers[active.opponent_id]!==undefined) {
       const a=answers[active.challenger_id],b=answers[active.opponent_id];
       const winnerId=a===b?null:a?active.challenger_id:active.opponent_id;
@@ -210,7 +228,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {game==="connect-four" && <div className="mx-auto grid max-w-[340px] grid-cols-7 gap-1 rounded-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><button key={r+"-"+c} onClick={()=>void playConnect(c)} disabled={!isMyTurn||Boolean(current?.winner)||waiting} className={`aspect-square rounded-full border border-blue-800 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"}`}/>))}</div>}
             {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{[["rock","✊"],["paper","✋"],["scissors","✌️"]].map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
             {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><p className="my-4 text-2xl font-black tracking-[0.3em]">{current?.scrambled??"HNSIUNES"}</p><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
-            {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><p className="font-semibold">{QUIZ[(current?.question??0)%QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.question??0)%QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div></div>}
+            {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><p className="font-semibold">{QUIZ[(current?.question??0)%QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.question??0)%QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div></div>}
             {current?.winner && <div className="mt-4 rounded-2xl bg-primary/10 p-4 text-center"><Trophy className="mx-auto mb-1 size-6 text-primary"/><p className="font-bold">{current.winner==="draw"?"It's a draw!":current.winner==="X"?"X wins!":current.winner==="O"?"O wins!":current.winner}</p></div>}
             {notice && <p className="mt-3 text-center text-sm text-muted-foreground">{notice}</p>}
             <div className="mt-5 flex gap-2"><button onClick={()=>void reset()} className="flex-1 rounded-xl border border-border p-3 text-sm font-semibold">Play again</button><button onClick={()=>{setSelected(null);setActive(null);setSolo(false);}} className="flex-1 rounded-xl bg-secondary p-3 text-sm font-semibold">Choose another</button></div>
