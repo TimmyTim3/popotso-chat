@@ -29,6 +29,8 @@ export interface ChatMessage {
   reactions?: Record<string, any> | null;
   read_at?: string | null;
   reply_to_id?: string | null;
+  pinned_at?: string | null;
+  favorited_by?: string[] | null;
   created_at: string;
   edited_at?: string | null;
   pending?: boolean;
