@@ -39,11 +39,25 @@ export interface ChatMessage {
   created_at: string;
   reactions?: Record<string, string> | null;
   read_at?: string | null;
+  edited_at?: string | null;
   /** client-side only */
   pending?: boolean | undefined;
   progress?: number | undefined;
   localUrl?: string | undefined;
   failed?: boolean | undefined;
+}
+
+/** Pick a voice-note format the current phone/browser can record (iPhone needs mp4). */
+export function pickAudioMime(): string {
+  if (typeof MediaRecorder === "undefined") return "";
+  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg;codecs=opus"];
+  return options.find((t) => MediaRecorder.isTypeSupported?.(t)) ?? "";
+}
+
+export function audioExtension(mime: string) {
+  if (mime.includes("mp4") || mime.includes("aac")) return "m4a";
+  if (mime.includes("ogg")) return "ogg";
+  return "webm";
 }
 
 export function kindForFile(file: File | Blob, name?: string): MessageKind {
@@ -109,7 +123,7 @@ export async function uploadRaw(
     xhr.open("POST", url, true);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.setRequestHeader("apikey", import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"] as string);
-    xhr.setRequestHeader("x-upsert", "true");
+    // No upsert: each file has a unique path, and upsert needs extra permissions that made uploads fail.
     xhr.setRequestHeader("cache-control", "3600");
     if (contentType) xhr.setRequestHeader("content-type", contentType);
     xhr.upload.onprogress = (event) => {

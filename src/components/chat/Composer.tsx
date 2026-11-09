@@ -1,7 +1,7 @@
 import { ArrowUp, Mic, Plus, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { formatDuration } from "@/lib/care-desk";
+import { formatDuration, pickAudioMime } from "@/lib/care-desk";
 import { cn } from "@/lib/utils";
 
 interface ComposerProps {
@@ -9,10 +9,29 @@ interface ComposerProps {
   onSendFiles: (files: File[]) => void;
   onSendVoice: (blob: Blob, durationMs: number) => void;
   onTyping?: () => void;
+  /** When set, the box edits this message instead of sending a new one. */
+  editing?: { id: string; text: string } | null;
+  onSaveEdit?: (id: string, text: string) => void;
+  onCancelEdit?: () => void;
 }
 
-export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: ComposerProps) {
+export function Composer({
+  onSendText,
+  onSendFiles,
+  onSendVoice,
+  onTyping,
+  editing,
+  onSaveEdit,
+  onCancelEdit,
+}: ComposerProps) {
   const [text, setText] = useState("");
+
+  useEffect(() => {
+    if (editing) {
+      setText(editing.text);
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }, [editing]);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [levels, setLevels] = useState<number[]>([]);
@@ -43,8 +62,15 @@ export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: Com
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        alert("Voice notes aren't supported in this browser. Please open the app in Chrome or Safari.");
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      const mime = pickAudioMime();
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       chunksRef.current = [];
       cancelledRef.current = false;
@@ -65,28 +91,48 @@ export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: Com
         }
       };
 
-      const context = new AudioContext();
-      audioCtxRef.current = context;
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 512;
-      context.createMediaStreamSource(stream).connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
+      // Start recording first so the waveform can never block a voice note.
+      recorder.start(250);
+      setRecording(true);
+
+      let analyser: AnalyserNode | null = null;
+      let data: Uint8Array<ArrayBuffer> | null = null;
+      try {
+        const Ctx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const context = new Ctx();
+        void context.resume();
+        audioCtxRef.current = context;
+        analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        context.createMediaStreamSource(stream).connect(analyser);
+        data = new Uint8Array(analyser.frequencyBinCount);
+      } catch {
+        analyser = null;
+      }
 
       const tick = () => {
-        analyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i += 1) sum += data[i]! * data[i]!;
-        const level = Math.min(1, Math.sqrt(sum / data.length) / 90);
+        let level = 0.3 + Math.random() * 0.3;
+        if (analyser && data) {
+          analyser.getByteFrequencyData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) sum += data[i]! * data[i]!;
+          level = Math.min(1, Math.sqrt(sum / data.length) / 90);
+        }
         setLevels((prev) => [...prev.slice(-45), Math.max(0.08, level)]);
         setElapsed(Date.now() - startedAtRef.current);
         rafRef.current = requestAnimationFrame(tick);
       };
       tick();
-
-      recorder.start();
-      setRecording(true);
-    } catch {
+    } catch (err) {
       setRecording(false);
+      const name = (err as { name?: string })?.name;
+      alert(
+        name === "NotAllowedError"
+          ? "Microphone is blocked. Tap the lock icon next to the web address → Permissions → Microphone → Allow, then try again."
+          : "Couldn't start the microphone. Close other apps using it and try again.",
+      );
     }
   };
 
@@ -99,6 +145,10 @@ export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: Com
     const value = text.trim();
     if (!value) return;
     setText("");
+    if (editing) {
+      onSaveEdit?.(editing.id, value);
+      return;
+    }
     onSendText(value);
   };
 
@@ -136,11 +186,31 @@ export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: Com
           </button>
         </div>
       ) : (
+        <>
+        {editing && (
+          <div className="mb-2 flex items-center justify-between rounded-2xl bg-secondary px-3 py-1.5 text-[13px]">
+            <span className="truncate text-muted-foreground">
+              <span className="font-semibold text-primary">Editing message</span> · {editing.text}
+            </span>
+            <button
+              type="button"
+              aria-label="Cancel editing"
+              onClick={() => {
+                setText("");
+                onCancelEdit?.();
+              }}
+              className="ml-2 shrink-0 font-medium text-primary"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <input
             ref={fileRef}
             type="file"
             multiple
+            accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
             className="hidden"
             onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
@@ -191,6 +261,7 @@ export function Composer({ onSendText, onSendFiles, onSendVoice, onTyping }: Com
             {text.trim() ? <ArrowUp className="size-5" /> : <Mic className="size-5" />}
           </button>
         </div>
+        </>
       )}
     </div>
   );
