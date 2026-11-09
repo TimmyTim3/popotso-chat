@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, Gamepad2, Loader2, Swords, Trophy, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 
@@ -59,7 +59,11 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
 
   const load = useCallback(async () => {
     const { data, error } = await (supabase as any).from("game_challenges").select("*").order("created_at", { ascending: false }).limit(30);
-    if (!error) setChallenges((data ?? []) as Challenge[]);
+    if (!error) {
+      const rows = (data ?? []) as Challenge[];
+      setChallenges(rows);
+      setActive((current) => current ? rows.find((row) => row.id === current.id) ?? current : null);
+    }
   }, []);
   useEffect(() => { void load(); const ch = supabase.channel("popotso-games").on("postgres_changes", { event: "*", schema: "public", table: "game_challenges" }, () => void load()).subscribe(); return () => { void supabase.removeChannel(ch); }; }, [load]);
 
@@ -88,7 +92,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const updateGame = async (next: Record<string, any>, winnerId?: string | null) => {
     if (!active) return;
     const { data, error } = await (supabase as any).from("game_challenges").update({
-      state: next, status: winnerId !== undefined ? "completed" : "active", winner_id: winnerId ?? null, updated_at: new Date().toISOString(),
+      state: next, status: next.winner ? "completed" : "active", winner_id: winnerId ?? null, updated_at: new Date().toISOString(),
     }).eq("id", active.id).select("*").single();
     if (!error) { setActive(data as Challenge); void load(); }
   };
@@ -138,9 +142,9 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(active) await updateGame(next,winnerId); else setSoloState(next);
   };
   const submitWord = async () => {
-    if(!current || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
+    if(!current || (active && userId === active.challenger_id) || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
     const next={...current,winner:"Correct! 🎉"};
-    if(active) await updateGame(next,active.challenger_id); else setSoloState(next);
+    if(active) await updateGame(next,userId); else setSoloState(next);
     setAnswer("");
   };
   const submitQuiz = async (index: number) => {
