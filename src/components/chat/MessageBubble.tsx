@@ -322,9 +322,10 @@ export function MessageBubble({
         {message.kind === "audio" && (
           <div className="relative">
             <VoiceNote
-              url={url}
-              durationMs={message.duration_ms ?? 0}
+              src={url}
+              durationMs={message.duration_ms}
               outgoing={outgoing}
+              seed={message.id}
             />
             {uploading && (
               <ProgressRing

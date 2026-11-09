@@ -36,9 +36,9 @@ export function putOutbox(item: ChatMessage) {
       return [];
     }
   })();
+  const { localUrl: _localUrl, ...persistable } = item;
   const clean: OutboxItem = {
-    ...item,
-    localUrl: undefined,
+    ...persistable,
     pending: false,
     failed: true,
     progress: 0,
@@ -49,13 +49,17 @@ export function putOutbox(item: ChatMessage) {
 }
 
 export function removeOutbox(clientId: string) {
+  deleteOutbox(clientId);
+  void deleteBlob(clientId);
+}
+
+export function deleteOutbox(clientId: string) {
   try {
     const all = JSON.parse(localStorage.getItem(KEY) ?? "[]") as OutboxItem[];
     saveAll(all.filter((m) => m.client_id !== clientId));
   } catch {
     /* ignore */
   }
-  void deleteBlob(clientId);
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -81,6 +85,8 @@ export async function saveBlob(clientId: string, blob: Blob) {
   }
 }
 
+export const putBlob = saveBlob;
+
 export async function getBlob(clientId: string): Promise<Blob | null> {
   try {
     const db = await openDb();
@@ -94,7 +100,7 @@ export async function getBlob(clientId: string): Promise<Blob | null> {
   }
 }
 
-async function deleteBlob(clientId: string) {
+export async function deleteBlob(clientId: string) {
   try {
     const db = await openDb();
     db.transaction(STORE, "readwrite").objectStore(STORE).delete(clientId);

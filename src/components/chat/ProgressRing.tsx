@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 interface ProgressRingProps {
   progress: number;
   size?: number;
-  onCancel?: () => void;
+  onCancel?: (() => void) | undefined;
 }
 
 export function ProgressRing({ progress, size = 52, onCancel }: ProgressRingProps) {

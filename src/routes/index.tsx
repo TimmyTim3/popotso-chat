@@ -89,7 +89,8 @@ function ChatRoom({ session }: { session: Session }) {
   const [inCall, setInCall] = useState(false);
   const [callWithVideo, setCallWithVideo] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
-    caller: string;
+    callerId: string;
+    callerName: string;
     isVideo?: boolean;
     sdp: RTCSessionDescriptionInit;
   } | null>(null);
@@ -124,7 +125,7 @@ function ChatRoom({ session }: { session: Session }) {
 
     if (error) return;
 
-    const outboxItems = await loadOutbox();
+    const outboxItems = loadOutbox(userId);
 
     const dbItems: ChatMessage[] = (data ?? []).map((row: any) => ({
       id: row.id,
@@ -152,7 +153,8 @@ function ChatRoom({ session }: { session: Session }) {
         (m) => m.client_id === out.client_id || m.id === out.id,
       );
       if (matchIndex >= 0) {
-        if (out.failed) merged[matchIndex].failed = true;
+        const matchingMessage = merged[matchIndex];
+        if (out.failed && matchingMessage) matchingMessage.failed = true;
       } else {
         merged.push(out);
       }
@@ -160,7 +162,7 @@ function ChatRoom({ session }: { session: Session }) {
 
     setMessages(merged);
     void markPartnerAsRead();
-  }, [markPartnerAsRead]);
+  }, [markPartnerAsRead, userId]);
 
   useEffect(() => {
     void refreshMessages();
@@ -234,17 +236,18 @@ function ChatRoom({ session }: { session: Session }) {
           typingTimeout.current = window.setTimeout(() => setTyping(null), 2500);
         }
       })
-      .on("broadcast", { event: "call-signal" }, (payload: any) => {
+      .on("broadcast", { event: "call-offer" }, (payload: any) => {
         const data = payload.payload;
-        if (!data || data.to !== email) return;
-        if (data.type === "offer") {
+        if (!data || data.callerId === userId || !data.sdp) return;
+        {
           setIncomingCall({
-            caller: data.from === "tim@popotso.app" ? "Father" : "Mother",
+            callerId: data.callerId,
+            callerName: data.callerName || "Family",
             isVideo: Boolean(data.isVideo),
             sdp: data.sdp,
           });
           setCallWithVideo(Boolean(data.isVideo));
-          haptic("heavy");
+          haptic("medium");
         }
       })
       .subscribe();
@@ -461,7 +464,7 @@ function ChatRoom({ session }: { session: Session }) {
       if (msg.kind === "text" && msg.body) {
         patch(clientId, { pending: true, failed: false });
         await insert({ client_id: clientId, kind: "text", body: msg.body });
-      } else {
+      } else if (msg.kind !== "text") {
         patch(clientId, { pending: true, failed: false, progress: 0 });
         const blob = await getBlob(clientId);
         if (blob && msg.attachment_name) {
@@ -560,7 +563,7 @@ function ChatRoom({ session }: { session: Session }) {
   const lastOutgoingIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (m.sender_id === userId || m.sender_email === email) return i;
+      if (m && (m.sender_id === userId || m.sender_email === email)) return i;
     }
     return -1;
   }, [messages, userId, email]);
@@ -682,7 +685,7 @@ function ChatRoom({ session }: { session: Session }) {
       <Composer
         onSendText={handleSendText}
         onSendFiles={sendFiles}
-        onSendVoiceNote={(blob, duration) =>
+        onSendVoice={(blob, duration) =>
           sendBlob(blob, "audio", `voicenote.${audioExtension(pickAudioMime())}`, duration)
         }
         onTyping={() => {
@@ -692,7 +695,7 @@ function ChatRoom({ session }: { session: Session }) {
             payload: { email, name: isNicky ? "Mother" : "Father" },
           });
         }}
-        editingMessage={editingMessage}
+        editing={editingMessage ? { id: editingMessage.id, text: editingMessage.body ?? "" } : null}
         onSaveEdit={handleSaveEdit}
         onCancelEdit={handleCancelEdit}
       />
@@ -700,20 +703,19 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Fullscreen Media Lightbox */}
       {lightbox && (
         <Lightbox
-          url={lightbox.url}
-          kind={lightbox.kind}
+          item={lightbox}
           onClose={() => setLightbox(null)}
         />
       )}
 
       {/* Low-Data Voice & Video Call Modal */}
-      {(inCall || incomingCall) && (
+      {(inCall || incomingCall) && channelRef.current && (
         <VoiceCallModal
-          session={session}
+          myId={userId}
+          myEmail={email}
           partnerEmail={partnerEmail}
-          partnerName={partnerName}
-          incomingOffer={incomingCall?.sdp}
-          incomingCaller={incomingCall?.caller}
+          channel={channelRef.current}
+          incomingCall={incomingCall}
           initialVideo={callWithVideo}
           onClose={() => {
             setInCall(false);

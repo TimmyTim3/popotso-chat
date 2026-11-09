@@ -46,3 +46,10 @@ export const EMOJI_GROUPS: { label: string; icon: string; list: string }[] = [
 export const EMOJI_LISTS: { label: string; icon: string; items: string[] }[] = EMOJI_GROUPS.map(
   (g) => ({ label: g.label, icon: g.icon, items: Array.from(new Set(split(g.list))) }),
 );
+
+export const QUICK_EMOJIS = ["❤️", "👍", "👎", "😂", "‼️", "😢"];
+
+export const REACTION_CATEGORIES = EMOJI_LISTS.map((group) => ({
+  label: group.label,
+  emojis: group.items,
+}));

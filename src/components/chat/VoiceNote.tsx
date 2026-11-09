@@ -132,7 +132,7 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[11px] tabular-nums opacity-65">
-            {formatDuration(playing || elapsed > 0 ? elapsed : durationMs)}
+            {formatDuration(playing || elapsed > 0 ? elapsed : durationMs ?? null)}
           </span>
           <span
             role="button"

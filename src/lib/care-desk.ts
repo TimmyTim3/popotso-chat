@@ -7,6 +7,12 @@ export type MessageKind = "text" | "image" | "video" | "audio" | "document";
 
 export type MemberEmail = "tim@popotso.app" | "nicky@popotso.app" | "mother@popotso.app";
 
+export const MEMBERS: Record<MemberEmail, string> = {
+  "tim@popotso.app": "Father",
+  "nicky@popotso.app": "Mother",
+  "mother@popotso.app": "Mother",
+};
+
 export interface ChatMessage {
   id: string;
   client_id?: string;
