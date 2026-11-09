@@ -88,7 +88,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     setBusy(false);
     if (error) { setNotice("Couldn't send the challenge. Please try again."); return; }
     setSelected(game);
-    void notifyPartner({ data: { preview: `🎮 You're challenged to ${GAMES.find(g=>g.id===game)?.name ?? "a game"}! Tap Popotso Games to join.`, title: "Popotso Games", type: "game" } }).catch(()=>{});
+    void notifyPartner({ data: { preview: `🎮 You're challenged to ${GAMES.find(g=>g.id===game)?.name ?? "a game"}! Tap Popotso Games to join.`, title: "Popotso Games", type: "game", challengeId: data.id } }).catch(()=>{});
     setNotice(`Challenge sent to ${partnerName}. They'll see a Ready to join button.`);
     setActive(data as Challenge);
     await load();
