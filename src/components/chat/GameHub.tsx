@@ -4,9 +4,21 @@ import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 
 type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz";
+type GameState = {
+  board: any;
+  turnId: string;
+  round: number;
+  choices: Record<string, string>;
+  scores: Record<string, number>;
+  answers: Record<string, boolean>;
+  word: string;
+  scrambled: string;
+  question: number;
+  winner?: string | null;
+};
 type Challenge = {
   id: string; game_type: GameType; challenger_id: string; opponent_id: string | null;
-  status: "pending" | "active" | "completed" | "declined"; state: Record<string, any>;
+  status: "pending" | "active" | "completed" | "declined"; state: GameState;
   winner_id: string | null; created_at: string;
 };
 const GAMES: { id: GameType; name: string; detail: string; icon: string }[] = [
@@ -24,35 +36,36 @@ const QUIZ = [
   { q: "What do bees make?", a: ["Milk", "Honey", "Bread"], correct: 1 },
   { q: "Which ocean is the largest?", a: ["Pacific", "Atlantic", "Indian"], correct: 0 },
 ];
-const initialState = (game: GameType, first: string) => ({
+const initialState = (game: GameType, first: string): GameState => ({
   board: game === "tic-tac-toe" ? Array(9).fill("") : game === "connect-four" ? Array.from({ length: 6 }, () => Array(7).fill("")) : [],
-  turnId: first, round: 0, choices: {}, scores: {}, answers: {}, word: WORDS[0], scrambled: "HNSIUNES",
+  turnId: first, round: 0, choices: {}, scores: {}, answers: {}, word: WORDS[0] ?? "SUNSHINE", scrambled: "HNSIUNES",
   question: 0, winner: null,
 });
 const winnerTtt = (b: string[]) => {
-  for (const [a, c, d] of [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]) {
+  const lines: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  for (const [a, c, d] of lines) {
     if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a];
   }
   return b.every(Boolean) ? "draw" : null;
 };
 const winnerConnect = (b: string[][]) => {
   for (let r=0;r<6;r++) for(let c=0;c<7;c++) {
-    const p=b[r][c]; if(!p) continue;
-    for(const [dr,dc] of [[0,1],[1,0],[1,1],[1,-1]]) {
-      let ok=true; for(let k=1;k<4;k++){const rr=r+dr*k,cc=c+dc*k;if(rr<0||rr>=6||cc<0||cc>=7||b[rr][cc]!==p){ok=false;break;}}
+    const p=b[r]?.[c]; if(!p) continue;
+    const directions: [number, number][] = [[0,1],[1,0],[1,1],[1,-1]];
+    for(const [dr,dc] of directions) {
+      let ok=true; for(let k=1;k<4;k++){const rr=r+dr*k,cc=c+dc*k;if(rr<0||rr>=6||cc<0||cc>=7||b[rr]?.[cc]!==p){ok=false;break;}}
       if(ok) return p;
     }
   }
   return b.every(row=>row.every(Boolean)) ? "draw" : null;
 };
-const mix = (word: string) => word.split("").sort(()=>Math.random()-.5).join("");
 
 export function GameHub({ userId, partnerName, onClose }: { userId: string; partnerName: string; onClose: () => void }) {
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [selected, setSelected] = useState<GameType | null>(null);
   const [active, setActive] = useState<Challenge | null>(null);
   const [solo, setSolo] = useState(false);
-  const [soloState, setSoloState] = useState<Record<string, any> | null>(null);
+  const [soloState, setSoloState] = useState<GameState | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [answer, setAnswer] = useState("");
@@ -89,7 +102,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if (error) { setNotice("That challenge is no longer available."); await load(); return; }
     setActive(data as Challenge); setSelected(challenge.game_type); setSolo(false);
   };
-  const updateGame = async (next: Record<string, any>, winnerId?: string | null) => {
+  const updateGame = async (next: GameState, winnerId?: string | null) => {
     if (!active) return;
     const { data, error } = await (supabase as any).from("game_challenges").update({
       state: next, status: next.winner ? "completed" : "active", winner_id: winnerId ?? null, updated_at: new Date().toISOString(),
@@ -97,7 +110,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if (!error) { setActive(data as Challenge); void load(); }
   };
   const startSolo = (game: GameType) => { setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
-  const current = active?.state ?? soloState;
+  const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
   const playerMark = active ? (active.challenger_id === userId ? "X" : "O") : "X";
@@ -110,7 +123,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     let next = { ...current, board, turnId: active ? (userId === active.challenger_id ? active.opponent_id : active.challenger_id) : "ai" };
     if (!active && !winner && board.some((v:string)=>!v)) {
       const empty = board.map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
-      const ai = empty[Math.floor(Math.random()*empty.length)]; board[ai] = "O"; winner = winnerTtt(board);
+      const ai = empty[Math.floor(Math.random()*empty.length)]; if (ai !== undefined) board[ai] = "O"; winner = winnerTtt(board);
       next = { ...next, board, turnId: userId };
     }
     if (winner) next = { ...next, winner };
@@ -120,11 +133,11 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const playConnect = async (col: number) => {
     if (!current || winnerConnect(current.board) || !isMyTurn) return;
     const board = current.board.map((r:string[])=>[...r]);
-    let row = -1; for(let r=5;r>=0;r--) if(!board[r][col]) { row=r; break; } if(row<0) return;
-    const mark = active ? playerMark : "X"; board[row][col]=mark;
+    let row = -1; for(let r=5;r>=0;r--) if(!board[r]?.[col]) { row=r; break; } if(row<0) return;
+    const mark = active ? playerMark : "X"; board[row]![col]=mark;
     let winner = winnerConnect(board);
     let next = { ...current, board, turnId: active ? (userId===active.challenger_id?active.opponent_id:active.challenger_id) : "ai" };
-    if(!active && !winner) { const choices=board[0].map((v:string,i:number)=>v? -1:i).filter((v:number)=>v>=0); if(choices.length){const c=choices[Math.floor(Math.random()*choices.length)];for(let r=5;r>=0;r--)if(!board[r][c]){board[r][c]="O";break;} winner=winnerConnect(board);} next={...next,board,turnId:userId}; }
+    if(!active && !winner) { const choices=board[0].map((v:string,i:number)=>v? -1:i).filter((v:number)=>v>=0); if(choices.length){const c=choices[Math.floor(Math.random()*choices.length)] ?? -1;for(let r=5;r>=0;r--)if(c>=0 && !board[r]?.[c]){board[r]![c]="O";break;} winner=winnerConnect(board);} next={...next,board,turnId:userId}; }
     if(winner) next={...next,winner};
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
