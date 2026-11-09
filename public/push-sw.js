@@ -1,4 +1,4 @@
-// Push-only service worker. It never caches pages or files.
+// Push-only service worker for Popotso Care Desk. Never caches pages or files.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -9,20 +9,30 @@ self.addEventListener("push", (event) => {
   } catch {
     data = { body: event.data ? event.data.text() : "" };
   }
-  const title = data.title || "Popotso Care Desk";
+
+  const isCall = data.type === "call";
+  const title = data.title || (isCall ? "📞 Popotso Incoming Call" : "Popotso Care Desk");
+
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      if (windows.some((c) => c.visibilityState === "visible")) return;
+      if (!isCall && windows.some((c) => c.visibilityState === "visible")) {
+        return; // Don't buzz lock screen if chat is currently open in front of the user
+      }
+
       await self.registration.showNotification(title, {
-        body: data.body || "New message",
+        body: data.body || (isCall ? "Tap to answer call" : "New message"),
         icon: "/icon-192.png",
         badge: "/icon-192.png",
-        tag: "care-desk",
+        tag: isCall ? "popotso-call" : "care-desk",
         renotify: true,
         silent: false,
-        vibrate: [60, 40, 60],
-        data: { url: "/" },
+        requireInteraction: isCall,
+        // Realistic ringing cadence vibration: buzz-buzz-buzz... buzz-buzz-buzz
+        vibrate: isCall
+          ? [500, 200, 500, 200, 500, 200, 800, 500, 200, 500]
+          : [100, 50, 100],
+        data: { url: "/", isCall },
       });
     })(),
   );
