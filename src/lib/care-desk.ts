@@ -20,13 +20,14 @@ export interface ChatMessage {
   sender_email: MemberEmail | string;
   body: string | null;
   kind: MessageKind;
-  attachment_path: string | null;
-  attachment_url: string | null;
-  attachment_name: string | null;
-  attachment_type: string | null;
-  attachment_size: number | null;
-  duration_ms: number | null;
-  reactions?: Record<string, string[]>;
+  attachment_path?: string | null;
+  attachment_url?: string | null;
+  attachment_name?: string | null;
+  attachment_type?: string | null;
+  attachment_size?: number | null;
+  duration_ms?: number | null;
+  reactions?: Record<string, any> | null;
+  read_at?: string | null;
   created_at: string;
   edited_at?: string | null;
   pending?: boolean;
@@ -180,4 +181,4 @@ export function audioExtension(mime: string): string {
   if (mime.includes("mp4") || mime.includes("aac") || mime.includes("m4a")) return "m4a";
   if (mime.includes("ogg")) return "ogg";
   return "webm";
-        }
+}
