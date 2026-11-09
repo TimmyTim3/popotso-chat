@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellRing, Info, LogOut, Phone, Video, X } from "lucide-react";
+import { Bell, BellRing, Gamepad2, Info, LogOut, Phone, Video, X } from "lucide-react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
+import { GameHub } from "@/components/chat/GameHub";
 import { Composer } from "@/components/chat/Composer";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { MessageBubble } from "@/components/chat/MessageBubble";
@@ -89,6 +90,8 @@ function ChatRoom({ session }: { session: Session }) {
   const [showAttribution, setShowAttribution] = useState(false);
   const [pushActive, setPushActive] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
+  const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
+  const [showGames, setShowGames] = useState(false);
   const [inCall, setInCall] = useState(false);
   const [callWithVideo, setCallWithVideo] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
@@ -265,6 +268,7 @@ function ChatRoom({ session }: { session: Session }) {
       attachment_type: row.attachment_type ?? null,
       attachment_size: row.attachment_size ?? null,
       duration_ms: row.duration_ms ?? null,
+      reply_to_id: row.reply_to_id ?? null,
       reactions: {},
     };
 
@@ -309,6 +313,7 @@ function ChatRoom({ session }: { session: Session }) {
         attachment_type: row.attachment_type ?? null,
         attachment_size: row.attachment_size ?? null,
         duration_ms: row.duration_ms ?? null,
+        reply_to_id: row.reply_to_id ?? null,
         created_at: new Date().toISOString(),
         pending: false,
         failed: true,
@@ -409,6 +414,8 @@ function ChatRoom({ session }: { session: Session }) {
 
   const handleSendText = async (text: string) => {
     const clientId = crypto.randomUUID();
+    const replyToId = replyTarget?.id ?? null;
+    setReplyTarget(null);
     const optimistic: ChatMessage = {
       id: clientId,
       client_id: clientId,
@@ -416,6 +423,7 @@ function ChatRoom({ session }: { session: Session }) {
       sender_email: email,
       body: text,
       kind: "text",
+      reply_to_id: replyToId,
       created_at: new Date().toISOString(),
       pending: true,
       failed: false,
@@ -423,7 +431,7 @@ function ChatRoom({ session }: { session: Session }) {
 
     putOutbox(optimistic);
     setMessages((prev) => [...prev, optimistic]);
-    await insert({ client_id: clientId, body: text, kind: "text" });
+    await insert({ client_id: clientId, body: text, kind: "text", reply_to_id: replyToId });
   };
 
   const handleCancelUpload = (clientId: string) => {
@@ -579,6 +587,15 @@ function ChatRoom({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowGames(true)}
+            className="flex size-9 items-center justify-center rounded-full text-primary transition-colors hover:bg-secondary active:scale-95"
+            aria-label="Open Popotso games"
+          >
+            <Gamepad2 className="size-4" />
+          </button>
+
           {/* Audio Call */}
           <button
             type="button"
@@ -647,6 +664,11 @@ function ChatRoom({ session }: { session: Session }) {
                   isRead={isLastOutgoing && partnerHasRead}
                   onSelectMedia={(url, kind) => setLightbox({ url, kind })}
                   onReact={(emoji) => handleReaction(msg.id, emoji)}
+                  onReply={() => setReplyTarget(msg)}
+                  replyPreview={msg.reply_to_id ? (() => {
+                    const original = messages.find((item) => item.id === msg.reply_to_id || item.client_id === msg.reply_to_id);
+                    return original ? { sender: original.sender_id === userId ? "You" : partnerName, text: previewFor(original.kind, original.body) } : { sender: "Original message", text: "Message unavailable" };
+                  })() : null}
                   onRetry={() => handleRetry(msg)}
                   onEdit={handleEdit}
                   onCancelUpload={handleCancelUpload}
@@ -687,6 +709,8 @@ function ChatRoom({ session }: { session: Session }) {
         editing={editingMessage ? { id: editingMessage.id, text: editingMessage.body ?? "" } : null}
         onSaveEdit={handleSaveEdit}
         onCancelEdit={handleCancelEdit}
+        replying={replyTarget ? { sender: replyTarget.sender_id === userId ? "yourself" : partnerName, text: previewFor(replyTarget.kind, replyTarget.body) } : null}
+        onCancelReply={() => setReplyTarget(null)}
       />
 
       {/* Fullscreen Media Lightbox */}
@@ -712,6 +736,8 @@ function ChatRoom({ session }: { session: Session }) {
           }}
         />
       )}
+
+      {showGames && <GameHub userId={userId} partnerName={partnerName} onClose={() => setShowGames(false)} />}
 
       {/* Technical Attribution Modal */}
       {showAttribution && (
