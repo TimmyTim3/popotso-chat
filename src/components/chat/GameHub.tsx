@@ -22,10 +22,10 @@ type Challenge = {
   winner_id: string | null; created_at: string;
 };
 const GAMES: { id: GameType; name: string; detail: string; icon: string }[] = [
-  { id: "tic-tac-toe", name: "Tic-tac-toe", detail: "A quick classic. Best of three!", icon: "⭕" },
+  { id: "tic-tac-toe", name: "Tic-tac-toe", detail: "A classic quick match for two or a solo warm-up.", icon: "⭕" },
   { id: "connect-four", name: "Four in a Row", detail: "Connect four before the other player.", icon: "🔴" },
   { id: "rock-paper-scissors", name: "Rock Paper Scissors", detail: "A little luck, a little strategy.", icon: "✊" },
-  { id: "word-scramble", name: "Word Scramble", detail: "Unscramble the word before the timer runs out.", icon: "🔤" },
+  { id: "word-scramble", name: "Word Scramble", detail: "Unscramble the word and see who solves it first.", icon: "🔤" },
   { id: "quick-quiz", name: "Family Quiz", detail: "Fun general-knowledge questions.", icon: "🧠" },
 ];
 const WORDS = ["SUNSHINE", "ELEPHANT", "RAINBOW", "POPCORN", "BUTTERFLY", "CHOCOLATE", "ADVENTURE"];
