@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Clock, Copy, Edit2, FileText, RefreshCw, SmilePlus } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star } from "lucide-react";
 
 import { ProgressRing } from "@/components/chat/ProgressRing";
 import { VoiceNote } from "@/components/chat/VoiceNote";
@@ -18,6 +18,12 @@ interface MessageBubbleProps {
   onReact?: (emoji: string) => void;
   onRetry?: () => void;
   onEdit?: (message: ChatMessage) => void;
+  onReply?: () => void;
+  replyPreview?: { sender: string; text: string; messageId?: string } | null;
+  isPinned?: boolean;
+  isFavorite?: boolean;
+  onPin?: () => void;
+  onFavorite?: () => void;
   onCancelUpload?: (clientId: string) => void;
   partnerName?: string;
   isRead?: boolean;
@@ -30,6 +36,12 @@ export function MessageBubble({
   onReact,
   onRetry,
   onEdit,
+  onReply,
+  replyPreview,
+  isPinned = false,
+  isFavorite = false,
+  onPin,
+  onFavorite,
   onCancelUpload,
   partnerName = "Partner",
   isRead = false,
@@ -40,6 +52,7 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const longPressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef(0);
   const url = message.localUrl ?? message.attachment_url ?? "";
   const uploading = Boolean(message.pending && message.attachment_path);
@@ -106,7 +119,8 @@ export function MessageBubble({
   };
 
   // Double-tap sends a quick Heart reaction
-  const handleTouchStart = () => {
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStart.current = { x: e.changedTouches[0]?.clientX ?? 0, y: e.changedTouches[0]?.clientY ?? 0 };
     longPressed.current = false;
     longPressTimer.current = window.setTimeout(() => {
       longPressed.current = true;
@@ -114,7 +128,19 @@ export function MessageBubble({
     }, 450);
   };
 
-  const handleTouchEnd = () => {
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    const dx = (e.changedTouches[0]?.clientX ?? 0) - (start?.x ?? 0);
+    const dy = (e.changedTouches[0]?.clientY ?? 0) - (start?.y ?? 0);
+    if (dx > 58 && Math.abs(dx) > Math.abs(dy) * 1.25 && onReply && !message.pending && !message.failed) {
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+      longPressed.current = true;
+      haptic("light");
+      onReply();
+      return;
+    }
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
@@ -160,6 +186,7 @@ export function MessageBubble({
 
   return (
     <div
+      id={`message-${message.id}`}
       className={`group relative mb-2 flex flex-col ${
         outgoing ? "items-end" : "items-start"
       }`}
@@ -223,6 +250,27 @@ export function MessageBubble({
 
           {/* Action Row */}
           <div className="flex items-center gap-1 pt-0.5">
+            {onReply && !message.pending && !message.failed && (
+              <button
+                type="button"
+                onClick={() => { closeMenu(); onReply(); }}
+                className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary"
+              >
+                <span>↩</span><span>Reply</span>
+              </button>
+            )}
+
+            {onPin && !message.pending && !message.failed && (
+              <button type="button" onClick={() => { closeMenu(); onPin(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
+                <Pin className="size-3.5 text-muted-foreground" /><span>{isPinned ? "Unpin" : "Pin"}</span>
+              </button>
+            )}
+            {onFavorite && !message.pending && !message.failed && (
+              <button type="button" onClick={() => { closeMenu(); onFavorite(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
+                <Star className="size-3.5 text-muted-foreground" /><span>{isFavorite ? "Unfavorite" : "Favorite"}</span>
+              </button>
+            )}
+
             {message.body && (
               <button
                 type="button"
@@ -269,6 +317,7 @@ export function MessageBubble({
         onClick={handleBubbleClick}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
         onContextMenu={handleContextMenu}
         className={`relative max-w-[82%] select-text overflow-visible rounded-[20px] transition active:scale-[0.99] ${
           groupedReactions.length > 0 ? "mt-2.5" : ""
@@ -302,6 +351,13 @@ export function MessageBubble({
               </span>
             ))}
           </div>
+        )}
+
+        {replyPreview && (
+          <button type="button" onClick={() => replyPreview.messageId && document.getElementById(`message-${replyPreview.messageId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} className="mb-2 block w-full rounded-xl border-l-[3px] border-primary bg-black/5 px-2.5 py-1.5 text-left text-xs dark:bg-white/10">
+            <p className="font-semibold text-primary">{replyPreview.sender}</p>
+            <p className="line-clamp-2 opacity-80">{replyPreview.text}</p>
+          </button>
         )}
 
         {/* Text Message */}
@@ -440,6 +496,8 @@ export function MessageBubble({
           </span>
         ) : (
           <>
+            {isPinned && <Pin className="size-3 text-primary" aria-label="Pinned" />}
+            {isFavorite && <Star className="size-3 fill-current text-primary" aria-label="Favorite" />}
             <span>{formatTime(message.created_at)}</span>
             {message.edited_at && <span className="italic">• Edited</span>}
             {receipt}

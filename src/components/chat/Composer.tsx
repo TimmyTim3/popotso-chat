@@ -13,6 +13,8 @@ interface ComposerProps {
   editing?: { id: string; text: string } | null;
   onSaveEdit?: (id: string, text: string) => void;
   onCancelEdit?: () => void;
+  replying?: { sender: string; text: string } | null;
+  onCancelReply?: () => void;
 }
 
 export function Composer({
@@ -23,6 +25,8 @@ export function Composer({
   editing,
   onSaveEdit,
   onCancelEdit,
+  replying,
+  onCancelReply,
 }: ComposerProps) {
   const [text, setText] = useState("");
 
@@ -187,6 +191,12 @@ export function Composer({
         </div>
       ) : (
         <>
+        {replying && !editing && (
+          <div className="mb-2 flex items-center justify-between rounded-2xl border-l-[3px] border-primary bg-secondary px-3 py-2 text-[13px]">
+            <span className="min-w-0 truncate text-muted-foreground"><span className="font-semibold text-primary">Replying to {replying.sender}</span> · {replying.text}</span>
+            <button type="button" aria-label="Cancel reply" onClick={onCancelReply} className="ml-2 shrink-0 font-medium text-primary">Cancel</button>
+          </div>
+        )}
         {editing && (
           <div className="mb-2 flex items-center justify-between rounded-2xl bg-secondary px-3 py-1.5 text-[13px]">
             <span className="truncate text-muted-foreground">
