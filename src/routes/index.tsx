@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellRing, Info, LogOut, Phone, X } from "lucide-react";
+import { Bell, BellRing, Info, LogOut, Phone, Video, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
@@ -99,10 +99,12 @@ function ChatRoom({ session }: { session: Session }) {
   const [pushActive, setPushActive] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [inCall, setInCall] = useState(false);
+  const [callWithVideo, setCallWithVideo] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
     callerId: string;
     callerName: string;
     sdp: RTCSessionDescriptionInit;
+    isVideo?: boolean;
   } | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 
@@ -234,14 +236,16 @@ function ChatRoom({ session }: { session: Session }) {
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     callChan
-      .on("broadcast", { event: "offer" }, ({ payload }: any) => {
-        if (payload?.targetEmail === email && payload?.sdp) {
+      .on("broadcast", { event: "call-offer" }, ({ payload }: any) => {
+        if (payload?.callerId && payload?.sdp) {
           haptic("medium");
           setIncomingCall({
             callerId: payload.callerId,
             callerName: payload.callerName,
             sdp: payload.sdp,
+            isVideo: Boolean(payload.isVideo),
           });
+          setCallWithVideo(Boolean(payload.isVideo));
           setInCall(true);
         }
       })
@@ -306,7 +310,7 @@ function ChatRoom({ session }: { session: Session }) {
     },
     [email, patch, userId],
   );
-        const optimistic = useCallback(
+      const optimistic = useCallback(
     (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
       id: clientId,
       sender_id: userId,
@@ -495,9 +499,24 @@ function ChatRoom({ session }: { session: Session }) {
     if (res === "enabled") {
       setPushActive(true);
       haptic("success");
-    } else {
+    } else if (res !== "denied") {
       alert(`Notification status: ${res}`);
     }
+  };
+
+  const startCall = (withVideo: boolean) => {
+    haptic("light");
+    setIncomingCall(null);
+    setCallWithVideo(withVideo);
+    setInCall(true);
+    // Fire push notification so partner's phone rings even if screen is locked
+    void notifyPartner({
+      data: {
+        title: "Popotso Incoming Call",
+        preview: `📞 ${withVideo ? "Video" : "Voice"} call from ${isNicky ? "Mother" : "Father"}`,
+        type: "call",
+      },
+    }).catch(() => {});
   };
 
   const grouped = useMemo(() => {
@@ -547,19 +566,26 @@ function ChatRoom({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Audio Call Button */}
+          {/* Low-Data Audio Call Button */}
           <button
             type="button"
-            onClick={() => {
-              haptic("light");
-              setIncomingCall(null);
-              setInCall(true);
-            }}
+            onClick={() => startCall(false)}
             className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
             aria-label="Low-data audio call"
-            title="Start low-data audio call"
+            title="Start low-data audio call (~9MB/hr)"
           >
             <Phone className="size-4 text-primary" />
+          </button>
+
+          {/* HD Balanced Video Call Button */}
+          <button
+            type="button"
+            onClick={() => startCall(true)}
+            className="flex size-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="HD balanced video call"
+            title="Start HD video call (~160MB/hr)"
+          >
+            <Video className="size-4 text-primary" />
           </button>
 
           {/* Notification Alert Bell */}
@@ -664,13 +690,14 @@ function ChatRoom({ session }: { session: Session }) {
         <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
       )}
 
-      {/* Low-Data Voice Call Modal */}
+      {/* Low-Data Voice & Video Call Modal */}
       {inCall && callChannelRef.current && (
         <VoiceCallModal
           myId={userId}
           myEmail={email}
           partnerEmail={partnerEmail}
           channel={callChannelRef.current}
+          initialVideo={callWithVideo}
           incomingCall={incomingCall}
           onClose={() => {
             setInCall(false);
@@ -701,5 +728,5 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-                         }
-              
+          }
+                     
