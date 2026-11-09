@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellRing, Gamepad2, Info, LogOut, Phone, Video, X } from "lucide-react";
+import { Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X } from "lucide-react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
@@ -92,6 +92,7 @@ function ChatRoom({ session }: { session: Session }) {
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [showGames, setShowGames] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("gameChallenge")) setShowGames(true);
@@ -556,6 +557,36 @@ function ChatRoom({ session }: { session: Session }) {
     return groups;
   }, [messages]);
 
+  const pinnedMessage = useMemo(
+    () => messages.filter((message) => Boolean(message.pinned_at)).sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? ""))[0] ?? null,
+    [messages],
+  );
+  const favoriteMessages = useMemo(
+    () => messages.filter((message) => (message.favorited_by ?? []).includes(userId)),
+    [messages, userId],
+  );
+
+  const handlePin = async (message: ChatMessage) => {
+    const pinned_at = message.pinned_at ? null : new Date().toISOString();
+    setMessages((prev) => prev.map((item) => item.id === message.id ? { ...item, pinned_at } : item));
+    const { error } = await (supabase as any).from("messages").update({ pinned_at }).eq("id", message.id);
+    if (error) {
+      console.error("Could not update pinned message:", error);
+      void refreshMessages();
+    }
+  };
+
+  const handleFavorite = async (message: ChatMessage) => {
+    const current = message.favorited_by ?? [];
+    const favorited_by = current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId];
+    setMessages((prev) => prev.map((item) => item.id === message.id ? { ...item, favorited_by } : item));
+    const { error } = await (supabase as any).from("messages").update({ favorited_by }).eq("id", message.id);
+    if (error) {
+      console.error("Could not update favorite message:", error);
+      void refreshMessages();
+    }
+  };
+
   const lastOutgoingIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
@@ -591,6 +622,15 @@ function ChatRoom({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowFavorites(true)}
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            aria-label="View favorite messages"
+          >
+            <Star className="size-4" />
+          </button>
+
           <button
             type="button"
             onClick={() => setShowGames(true)}
@@ -647,6 +687,11 @@ function ChatRoom({ session }: { session: Session }) {
 
       {/* Messages Scroll Area */}
       <main className="flex-1 overflow-y-auto px-4 py-4">
+        {pinnedMessage && (
+          <button type="button" onClick={() => document.getElementById(`message-${pinnedMessage.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} className="mb-4 flex w-full items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-left text-xs">
+            <Pin className="size-4 shrink-0 text-primary" /><span className="min-w-0 truncate"><strong>Pinned</strong> · {pinnedMessage.sender_id === userId ? "You" : partnerName}: {previewFor(pinnedMessage.kind, pinnedMessage.body)}</span>
+          </button>
+        )}
         {grouped.map((group) => (
           <div key={group.label} className="mb-6">
             <div className="my-3 text-center">
@@ -669,6 +714,10 @@ function ChatRoom({ session }: { session: Session }) {
                   onSelectMedia={(url, kind) => setLightbox({ url, kind })}
                   onReact={(emoji) => handleReaction(msg.id, emoji)}
                   onReply={() => setReplyTarget(msg)}
+                  isPinned={Boolean(msg.pinned_at)}
+                  isFavorite={(msg.favorited_by ?? []).includes(userId)}
+                  onPin={() => void handlePin(msg)}
+                  onFavorite={() => void handleFavorite(msg)}
                   replyPreview={msg.reply_to_id ? (() => {
                     const original = messages.find((item) => item.id === msg.reply_to_id || item.client_id === msg.reply_to_id);
                     return original ? { sender: original.sender_id === userId ? "You" : partnerName, text: previewFor(original.kind, original.body) } : { sender: "Original message", text: "Message unavailable" };
@@ -742,6 +791,13 @@ function ChatRoom({ session }: { session: Session }) {
       )}
 
       {showGames && <GameHub userId={userId} partnerName={partnerName} onClose={() => setShowGames(false)} />}
+
+      {showFavorites && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <header className="flex h-14 items-center justify-between border-b border-border px-4"><h2 className="font-semibold">Favorite messages</h2><button type="button" onClick={() => setShowFavorites(false)} className="rounded-full p-2 hover:bg-secondary" aria-label="Close favorites"><X className="size-5" /></button></header>
+          <div className="flex-1 overflow-y-auto p-4">{favoriteMessages.length ? favoriteMessages.map((message) => <button key={message.id} type="button" onClick={() => { setShowFavorites(false); window.setTimeout(() => document.getElementById(`message-${message.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 100); }} className="mb-2 block w-full rounded-xl border border-border p-3 text-left"><span className="mb-1 block text-xs font-semibold text-primary">{message.sender_id === userId ? "You" : partnerName}</span><span className="text-sm">{previewFor(message.kind, message.body)}</span></button>) : <p className="py-12 text-center text-sm text-muted-foreground">No favorites yet. Long-press a message and tap Favorite.</p>}</div>
+        </div>
+      )}
 
       {/* Technical Attribution Modal */}
       {showAttribution && (
