@@ -5,6 +5,10 @@ alter table public.messages
 create index if not exists messages_reply_to_id_idx
   on public.messages(reply_to_id);
 
+alter table public.messages
+  add column if not exists pinned_at timestamptz,
+  add column if not exists favorited_by uuid[] not null default '{}';
+
 create table if not exists public.game_challenges (
   id uuid primary key default gen_random_uuid(),
   game_type text not null check (game_type in ('tic-tac-toe', 'connect-four', 'rock-paper-scissors', 'word-scramble', 'quick-quiz')),
