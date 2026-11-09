@@ -260,12 +260,12 @@ export function MessageBubble({
               </button>
             )}
 
-            {onPin && (
+            {onPin && !message.pending && !message.failed && (
               <button type="button" onClick={() => { closeMenu(); onPin(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
                 <Pin className="size-3.5 text-muted-foreground" /><span>{isPinned ? "Unpin" : "Pin"}</span>
               </button>
             )}
-            {onFavorite && (
+            {onFavorite && !message.pending && !message.failed && (
               <button type="button" onClick={() => { closeMenu(); onFavorite(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
                 <Star className="size-3.5 text-muted-foreground" /><span>{isFavorite ? "Unfavorite" : "Favorite"}</span>
               </button>
