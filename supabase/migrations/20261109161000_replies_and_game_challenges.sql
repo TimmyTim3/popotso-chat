@@ -26,6 +26,8 @@ create index if not exists game_challenges_opponent_status_idx
 create index if not exists game_challenges_challenger_status_idx
   on public.game_challenges(challenger_id, status, created_at desc);
 
+grant select, insert, update on public.game_challenges to authenticated;
+
 alter table public.game_challenges enable row level security;
 
 drop policy if exists "Participants can read game challenges" on public.game_challenges;
