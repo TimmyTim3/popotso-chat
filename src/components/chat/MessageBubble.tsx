@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Clock, Copy, Edit2, FileText, RefreshCw, SmilePlus } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star } from "lucide-react";
 
 import { ProgressRing } from "@/components/chat/ProgressRing";
 import { VoiceNote } from "@/components/chat/VoiceNote";
@@ -20,6 +20,10 @@ interface MessageBubbleProps {
   onEdit?: (message: ChatMessage) => void;
   onReply?: () => void;
   replyPreview?: { sender: string; text: string } | null;
+  isPinned?: boolean;
+  isFavorite?: boolean;
+  onPin?: () => void;
+  onFavorite?: () => void;
   onCancelUpload?: (clientId: string) => void;
   partnerName?: string;
   isRead?: boolean;
@@ -34,6 +38,10 @@ export function MessageBubble({
   onEdit,
   onReply,
   replyPreview,
+  isPinned = false,
+  isFavorite = false,
+  onPin,
+  onFavorite,
   onCancelUpload,
   partnerName = "Partner",
   isRead = false,
@@ -178,6 +186,7 @@ export function MessageBubble({
 
   return (
     <div
+      id={`message-${message.id}`}
       className={`group relative mb-2 flex flex-col ${
         outgoing ? "items-end" : "items-start"
       }`}
@@ -248,6 +257,17 @@ export function MessageBubble({
                 className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary"
               >
                 <span>↩</span><span>Reply</span>
+              </button>
+            )}
+
+            {onPin && (
+              <button type="button" onClick={() => { closeMenu(); onPin(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
+                <Pin className="size-3.5 text-muted-foreground" /><span>{isPinned ? "Unpin" : "Pin"}</span>
+              </button>
+            )}
+            {onFavorite && (
+              <button type="button" onClick={() => { closeMenu(); onFavorite(); }} className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-secondary">
+                <Star className="size-3.5 text-muted-foreground" /><span>{isFavorite ? "Unfavorite" : "Favorite"}</span>
               </button>
             )}
 
@@ -476,6 +496,8 @@ export function MessageBubble({
           </span>
         ) : (
           <>
+            {isPinned && <Pin className="size-3 text-primary" aria-label="Pinned" />}
+            {isFavorite && <Star className="size-3 fill-current text-primary" aria-label="Favorite" />}
             <span>{formatTime(message.created_at)}</span>
             {message.edited_at && <span className="italic">• Edited</span>}
             {receipt}
