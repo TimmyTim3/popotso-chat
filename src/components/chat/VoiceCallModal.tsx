@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   Camera,
   CameraOff,
   Mic,
@@ -51,6 +52,7 @@ export function VoiceCallModal({
   const [videoMuted, setVideoMuted] = useState(false);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -64,7 +66,7 @@ export function VoiceCallModal({
   const vibrateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const partnerLabel = MEMBERS[partnerEmail] ?? "Family";
+  const partnerLabel = MEMBERS[partnerEmail] ?? "Partner";
 
   // Realistic phone ringtone synthesizer (Web Audio API) + physical phone vibration
   const startRingtone = useCallback((isIncoming: boolean) => {
@@ -78,7 +80,6 @@ export function VoiceCallModal({
       const ctx = new AudioCtx();
       audioCtxRef.current = ctx;
 
-      // Tone pattern: Outgoing is standard 440Hz European/US ring; Incoming is melodic dual-tone chime
       const osc1 = ctx.createOscillator();
       const osc2 = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -86,7 +87,7 @@ export function VoiceCallModal({
       osc1.type = "sine";
       osc2.type = "sine";
       osc1.frequency.value = isIncoming ? 440 : 425;
-      osc2.frequency.value = isIncoming ? 554 : 425; // Melodic major third for incoming call
+      osc2.frequency.value = isIncoming ? 554 : 425;
       gain.gain.value = 0;
 
       osc1.connect(gain);
@@ -106,7 +107,6 @@ export function VoiceCallModal({
       pulse();
       ringIntervalRef.current = setInterval(pulse, isIncoming ? 800 : 1500);
 
-      // Physical vibration: standard phone call buzz
       if (typeof navigator !== "undefined" && "vibrate" in navigator) {
         navigator.vibrate([400, 200, 400, 1000]);
         vibrateIntervalRef.current = setInterval(() => {
@@ -114,7 +114,7 @@ export function VoiceCallModal({
         }, 2000);
       }
     } catch {
-      // AudioContext autoplay or permission restriction
+      // AudioContext restriction
     }
   }, []);
 
@@ -180,7 +180,7 @@ export function VoiceCallModal({
       }
 
       setStatus("ended");
-      setTimeout(() => onClose(), 800);
+      setTimeout(() => onClose(), 600);
     },
     [channel, myId, onClose, stopRingtone],
   );
@@ -221,7 +221,6 @@ export function VoiceCallModal({
         }
       };
 
-      // Balanced HD video constraints: 640x480 or 720p @ 24fps
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -231,10 +230,10 @@ export function VoiceCallModal({
         },
         video: enableVideo
           ? {
-              width: { ideal: 640, max: 1280 },
-              height: { ideal: 480, max: 720 },
-              frameRate: { ideal: 24, max: 30 },
               facingMode: face,
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { max: 24 },
             }
           : false,
       });
@@ -250,15 +249,16 @@ export function VoiceCallModal({
     },
     [channel, myId, stopRingtone],
   );
-      // Caller flow
+
+  // Caller flow
   useEffect(() => {
     if (!isCaller) {
-      startRingtone(true); // Incoming ring chime
+      startRingtone(true);
       return;
     }
 
     setStatus("connecting");
-    startRingtone(false); // Outgoing dialing ring
+    startRingtone(false);
 
     void (async () => {
       try {
@@ -280,9 +280,14 @@ export function VoiceCallModal({
         });
 
         setStatus("ringing");
-      } catch (err) {
+      } catch (err: any) {
         console.error("Call setup error", err);
-        endCall(true);
+        stopRingtone();
+        setPermissionError(
+          err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError"
+            ? "Microphone and camera permissions were denied. Tap the lock/tune icon in your browser address bar to allow permissions."
+            : "Could not access audio/camera device. Please check your settings."
+        );
       }
     })();
 
@@ -290,8 +295,7 @@ export function VoiceCallModal({
       stopRingtone();
     };
   }, [endCall, facingMode, isCaller, isVideo, myEmail, myId, setupPeerConnection, startRingtone, stopRingtone, channel]);
-
-  const acceptCall = async () => {
+          const acceptCall = async () => {
     if (!incomingCall) return;
     haptic("success");
     stopRingtone();
@@ -309,12 +313,13 @@ export function VoiceCallModal({
         payload: { calleeId: myId, sdp: finalAnswer },
       });
       setStatus("connected");
-    } catch {
-      endCall(true);
+    } catch (err: any) {
+      stopRingtone();
+      setPermissionError("Could not access microphone or camera to accept call.");
     }
   };
 
-  // Call timer
+  // Call duration timer
   useEffect(() => {
     if (status === "connected") {
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
@@ -324,29 +329,29 @@ export function VoiceCallModal({
     };
   }, [status]);
 
-  // Realtime signaling listeners
+  // Handle Realtime incoming signals
   useEffect(() => {
-    const handleAnswer = async (event: any) => {
+    const handleAnswer = async (event: { payload: unknown }) => {
       const payload = event.payload as { calleeId?: string; sdp?: RTCSessionDescriptionInit } | undefined;
-      if (payload?.sdp && pcRef.current && (status === "connecting" || status === "ringing")) {
-        await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+      if (payload?.sdp && pcRef.current) {
         stopRingtone();
+        await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
         setStatus("connected");
       }
     };
 
-    const handleIce = async (event: any) => {
+    const handleIce = async (event: { payload: unknown }) => {
       const payload = event.payload as { candidate?: RTCIceCandidateInit; from?: string } | undefined;
       if (payload?.candidate && payload.from !== myId && pcRef.current) {
         try {
           await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
         } catch {
-          // ignore
+          // Ignore candidate errors
         }
       }
     };
 
-    const handleHangup = (event: any) => {
+    const handleHangup = (event: { payload: unknown }) => {
       const payload = event.payload as { from?: string } | undefined;
       if (payload?.from !== myId) {
         endCall(false);
@@ -445,7 +450,7 @@ export function VoiceCallModal({
     <div className="fixed inset-0 z-50 flex flex-col justify-between bg-black text-white backdrop-blur-2xl">
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
-      {/* Main Video View (Remote partner) or Audio Avatar */}
+      {/* Main Video View or Audio Avatar */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden">
         {isVideo && status === "connected" ? (
           <video
@@ -455,33 +460,26 @@ export function VoiceCallModal({
             className="size-full object-cover"
           />
         ) : (
-          <div className="flex flex-col items-center text-center p-6">
-            <div className="mb-4 flex size-28 items-center justify-center rounded-full bg-primary/20 ring-4 ring-primary/40">
-              {isVideo ? (
-                <Video className={`size-12 text-primary ${status === "ringing" || status === "incoming" ? "animate-pulse" : ""}`} />
-              ) : (
-                <Phone className={`size-12 text-primary ${status === "ringing" || status === "incoming" ? "animate-pulse" : ""}`} />
-              )}
-            </div>
-            <h2 className="text-2xl font-bold tracking-tight">{partnerLabel}</h2>
-            <p className="mt-1 text-sm font-medium text-white/70">{statusText}</p>
-
-            <div className="mt-4 flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-1 text-xs font-medium text-white/90 backdrop-blur-md">
-              <Wifi className="size-3.5 text-primary" />
-              <span>
-                {status === "connected"
-                  ? `${dataUsedMB} MB used (${isVideo ? "HD Balanced 450kbps" : "Opus 24kbps"})`
-                  : isVideo
-                    ? "~160 MB / hour (85% cheaper than WhatsApp)"
-                    : "~9 MB / hour (95% cheaper than cellular)"}
+          <div className="flex flex-col items-center gap-3">
+            <div className="flex size-28 items-center justify-center rounded-full bg-secondary/20 shadow-2xl backdrop-blur-lg">
+              <span className="text-4xl font-semibold tracking-tight text-white/90">
+                {partnerLabel[0]}
               </span>
             </div>
+            <h2 className="text-2xl font-bold tracking-tight">{partnerLabel}</h2>
+            <p className="text-sm font-medium text-white/70">{statusText}</p>
+            {status === "connected" && (
+              <div className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">
+                <Wifi className="size-3 text-emerald-400" />
+                <span>Opus ~24 kbps • {dataUsedMB} MB used</span>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Floating Picture-in-Picture Local Self Video */}
+        {/* Small Picture-in-Picture Local Video */}
         {isVideo && (
-          <div className="absolute right-4 top-14 size-28 sm:size-36 overflow-hidden rounded-2xl border-2 border-white/20 bg-neutral-900 shadow-2xl">
+          <div className="absolute top-6 right-6 z-10 h-36 w-24 overflow-hidden rounded-2xl border-2 border-white/20 bg-black/60 shadow-2xl">
             <video
               ref={localVideoRef}
               autoPlay
@@ -491,93 +489,116 @@ export function VoiceCallModal({
             />
           </div>
         )}
-      </div>
 
-      {/* Call Controls Footer */}
-      <div className="p-6 pb-10">
-        {status === "incoming" ? (
-          <div className="flex items-center justify-around">
+        {/* Permission Denied Card */}
+        {permissionError && (
+          <div className="absolute inset-x-6 top-1/3 z-30 rounded-3xl border border-destructive/40 bg-zinc-900/95 p-6 text-center shadow-2xl backdrop-blur-xl">
+            <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-full bg-destructive/20 text-destructive">
+              <AlertCircle className="size-6" />
+            </div>
+            <h3 className="mb-2 text-base font-bold text-white">Permission Needed</h3>
+            <p className="mb-4 text-xs leading-relaxed text-zinc-300">{permissionError}</p>
             <button
               type="button"
-              onClick={() => endCall(true)}
-              className="flex size-16 items-center justify-center rounded-full bg-red-600 text-white shadow-lg active:scale-95 transition-transform"
-              aria-label="Decline call"
+              onClick={() => endCall(false)}
+              className="rounded-full bg-secondary px-5 py-2 text-xs font-semibold text-foreground hover:bg-secondary/80"
             >
-              <PhoneOff className="size-7" />
-            </button>
-            <button
-              type="button"
-              onClick={acceptCall}
-              className="flex size-16 items-center justify-center rounded-full bg-green-600 text-white shadow-lg active:scale-95 transition-transform animate-bounce"
-              aria-label="Accept call"
-            >
-              <Phone className="size-7" />
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center justify-center gap-4">
-            <button
-              type="button"
-              onClick={toggleMute}
-              className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
-                muted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
-              }`}
-              aria-label={muted ? "Unmute microphone" : "Mute microphone"}
-              title={muted ? "Unmute" : "Mute"}
-            >
-              {muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
-            </button>
-
-            {isVideo && (
-              <>
-                <button
-                  type="button"
-                  onClick={toggleVideoMute}
-                  className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
-                    videoMuted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
-                  }`}
-                  aria-label={videoMuted ? "Turn on camera" : "Turn off camera"}
-                  title={videoMuted ? "Camera Off" : "Camera On"}
-                >
-                  {videoMuted ? <CameraOff className="size-5" /> : <Camera className="size-5" />}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={flipCamera}
-                  className="flex size-12 items-center justify-center rounded-full bg-white/20 text-white transition-colors hover:bg-white/30 active:scale-95"
-                  aria-label="Flip camera front/back"
-                  title="Flip camera"
-                >
-                  <RefreshCw className="size-5" />
-                </button>
-              </>
-            )}
-
-            <button
-              type="button"
-              onClick={toggleSpeaker}
-              className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
-                speakerMuted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
-              }`}
-              aria-label={speakerMuted ? "Unmute speaker" : "Mute speaker"}
-              title={speakerMuted ? "Muted Speaker" : "Speaker On"}
-            >
-              {speakerMuted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => endCall(true)}
-              className="flex size-14 items-center justify-center rounded-full bg-red-600 text-white shadow-xl transition-transform active:scale-95"
-              aria-label="Hang up call"
-              title="End call"
-            >
-              <PhoneOff className="size-6" />
+              Dismiss
             </button>
           </div>
         )}
       </div>
+
+      {/* Incoming Call Accept/Decline Bar */}
+      {status === "incoming" && !permissionError && (
+        <div className="flex items-center justify-around pb-12 pt-6">
+          <button
+            type="button"
+            onClick={() => endCall(true)}
+            className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-xl transition hover:scale-105 active:scale-95"
+            aria-label="Decline call"
+          >
+            <PhoneOff className="size-7" />
+          </button>
+          <button
+            type="button"
+            onClick={acceptCall}
+            className="flex size-16 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl transition hover:scale-105 active:scale-95"
+            aria-label="Accept call"
+          >
+            <Phone className="size-7" />
+          </button>
+        </div>
+      )}
+
+      {/* Connected or Outgoing Calling Control Bar */}
+      {status !== "incoming" && !permissionError && (
+        <div className="flex items-center justify-center gap-5 pb-12 pt-6">
+          {/* Mute Mic */}
+          <button
+            type="button"
+            onClick={toggleMute}
+            className={`flex size-12 items-center justify-center rounded-full transition active:scale-95 ${
+              muted ? "bg-white text-black" : "bg-white/15 text-white backdrop-blur-lg"
+            }`}
+            aria-label={muted ? "Unmute mic" : "Mute mic"}
+          >
+            {muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
+          </button>
+
+          {/* Toggle Video */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !isVideo;
+              setIsVideo(next);
+              toggleVideoMute();
+            }}
+            className={`flex size-12 items-center justify-center rounded-full transition active:scale-95 ${
+              videoMuted || !isVideo
+                ? "bg-white/15 text-white/50"
+                : "bg-white text-black"
+            }`}
+            aria-label="Toggle camera"
+          >
+            {isVideo ? <Video className="size-5" /> : <CameraOff className="size-5" />}
+          </button>
+
+          {/* Flip Camera */}
+          {isVideo && (
+            <button
+              type="button"
+              onClick={flipCamera}
+              className="flex size-12 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-lg transition active:scale-95"
+              aria-label="Flip camera"
+            >
+              <RefreshCw className="size-5" />
+            </button>
+          )}
+
+          {/* Speaker Mute */}
+          <button
+            type="button"
+            onClick={toggleSpeaker}
+            className={`flex size-12 items-center justify-center rounded-full transition active:scale-95 ${
+              speakerMuted ? "bg-white text-black" : "bg-white/15 text-white backdrop-blur-lg"
+            }`}
+            aria-label={speakerMuted ? "Unmute speaker" : "Mute speaker"}
+          >
+            {speakerMuted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
+          </button>
+
+          {/* End Call */}
+          <button
+            type="button"
+            onClick={() => endCall(true)}
+            className="flex size-14 items-center justify-center rounded-full bg-destructive text-white shadow-xl transition hover:scale-105 active:scale-95"
+            aria-label="End call"
+          >
+            <PhoneOff className="size-6" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
