@@ -18,7 +18,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      if (!isCall && windows.some((c) => c.visibilityState === "visible")) {
+      if (!isCall && !isGame && windows.some((c) => c.visibilityState === "visible")) {
         return; // Don't buzz lock screen if chat is currently open in front of the user
       }
 
