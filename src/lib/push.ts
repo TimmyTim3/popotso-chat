@@ -34,9 +34,21 @@ export async function enablePush(userId: string): Promise<PushStatus> {
     const ios = /iphone|ipad/i.test(navigator.userAgent);
     return ios ? "install-first" : "unsupported";
   }
+
+  // If already denied by Chrome/Safari, browser blocks prompt() — guide user to site settings
+  if (Notification.permission === "denied") {
+    alert(
+      "Notifications are blocked in your browser settings.\n\nTo allow them:\n1. Tap the lock or sliders icon next to popotso.lovable.app in your address bar.\n2. Tap 'Permissions' (or 'Site settings').\n3. Set 'Notifications' to 'Allow'.\n4. Refresh the page and tap this bell icon again.",
+    );
+    return "denied";
+  }
+
   const permission =
     Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
-  if (permission !== "granted") return "denied";
+  if (permission !== "granted") {
+    return "denied";
+  }
+
   try {
     const reg = await navigator.serviceWorker.register("/push-sw.js");
     await navigator.serviceWorker.ready;
