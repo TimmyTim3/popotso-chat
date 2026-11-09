@@ -8,8 +8,10 @@ const MEMBERS = ["tim@popotso.app", "nicky@popotso.app", "mother@popotso.app"];
 /** Sends a lock-screen alert to the other parent's devices. */
 export const notifyPartner = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { preview: string }) => ({
+  .inputValidator((data: { preview: string; title?: string; type?: string }) => ({
     preview: String(data?.preview ?? "").slice(0, 140),
+    title: data?.title ? String(data.title).slice(0, 50) : undefined,
+    type: data?.type ? String(data.type).slice(0, 20) : "message",
   }))
   .handler(async ({ data, context }) => {
     const email = String((context.claims as { email?: string }).email ?? "");
@@ -26,8 +28,10 @@ export const notifyPartner = createServerFn({ method: "POST" })
       .select("id, endpoint, p256dh, auth")
       .neq("user_id", context.userId);
 
-    const title = email === "tim@popotso.app" ? "Father" : "Mother";
+    const defaultTitle = email === "tim@popotso.app" ? "Father" : "Mother";
+    const notificationTitle = data.title || defaultTitle;
     let sent = 0;
+
     await Promise.all(
       ((subs ?? []) as { id: string; endpoint: string; p256dh: string; auth: string }[]).map(async (sub) => {
         try {
@@ -35,7 +39,11 @@ export const notifyPartner = createServerFn({ method: "POST" })
             privateJWK: JSON.parse(jwk),
             subscription: { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
             message: {
-              payload: { title, body: data.preview || "New message" },
+              payload: {
+                title: notificationTitle,
+                body: data.preview || "New message",
+                type: data.type || "message",
+              },
               adminContact: "mailto:tim@popotso.app",
             },
           });
