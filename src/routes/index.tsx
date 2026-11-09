@@ -11,9 +11,11 @@ import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ATTRIBUTION,
+  audioExtension,
   formatClock,
   formatDayLabel,
   kindForFile,
+  pickAudioMime,
   previewFor,
   signedUrlFor,
   uploadRaw,
@@ -22,6 +24,7 @@ import {
   type MessageKind,
 } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
+import { getBlob, loadOutbox, putOutbox, removeOutbox, saveBlob } from "@/lib/outbox";
 import { currentPushEnabled, enablePush } from "@/lib/push";
 import { notifyPartner } from "@/lib/push.functions";
 
@@ -101,6 +104,7 @@ function ChatRoom({ session }: { session: Session }) {
     callerName: string;
     sdp: RTCSessionDescriptionInit;
   } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -148,7 +152,10 @@ function ChatRoom({ session }: { session: Session }) {
           }),
         );
         if (active) {
-          setMessages(resolved);
+          const localOutbox = loadOutbox(userId);
+          const dbClientIds = new Set(resolved.map((m) => m.client_id).filter(Boolean));
+          const unsent = localOutbox.filter((m) => !m.client_id || !dbClientIds.has(m.client_id));
+          setMessages([...resolved, ...unsent]);
           void markAsRead();
         }
       });
@@ -195,8 +202,10 @@ function ChatRoom({ session }: { session: Session }) {
               m.id === updated.id
                 ? {
                     ...m,
+                    body: updated.body ?? m.body,
                     reactions: updated.reactions ?? null,
                     read_at: updated.read_at ?? null,
+                    edited_at: updated.edited_at ?? null,
                   }
                 : m,
             ),
@@ -249,12 +258,12 @@ function ChatRoom({ session }: { session: Session }) {
   }, [messages, partnerTyping]);
 
   const patch = useCallback((clientId: string, delta: Partial<ChatMessage>) => {
-    setMessages((prev) => prev.map((m) => (m.client_id === clientId ? { ...m, ...delta } : m)));
+    setMessages((prev) => prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...delta } : m)));
   }, []);
 
   const insert = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (row: any) => {
+    async (row: any, originalBlob?: Blob) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
         .from("messages")
@@ -267,10 +276,28 @@ function ChatRoom({ session }: { session: Session }) {
         .single();
       if (error) {
         console.error("Message send failed:", error);
-        if (row.client_id) patch(row.client_id, { failed: true, pending: false });
+        if (row.client_id) {
+          patch(row.client_id, { failed: true, pending: false });
+          putOutbox({
+            id: row.client_id,
+            client_id: row.client_id,
+            sender_id: userId,
+            sender_email: email,
+            created_at: new Date().toISOString(),
+            failed: true,
+            pending: false,
+            ...row,
+          });
+          if (originalBlob) {
+            void saveBlob(row.client_id, originalBlob);
+          }
+        }
         return;
       }
-      if (row.client_id) patch(row.client_id, { id: data.id, pending: false });
+      if (row.client_id) {
+        patch(row.client_id, { id: data.id, pending: false, failed: false });
+        removeOutbox(row.client_id);
+      }
       void notifyPartner({
         data: {
           preview: previewFor(row.kind, row.body),
@@ -279,25 +306,29 @@ function ChatRoom({ session }: { session: Session }) {
     },
     [email, patch, userId],
   );
+        const optimistic = useCallback(
+    (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
+      id: clientId,
+      sender_id: userId,
+      sender_email: email,
+      body: null,
+      kind: "text",
+      attachment_path: null,
+      attachment_url: null,
+      attachment_name: null,
+      attachment_type: null,
+      attachment_size: null,
+      duration_ms: null,
+      client_id: clientId,
+      created_at: new Date().toISOString(),
+      pending: true,
+      progress: 0,
+      failed: false,
+      ...partial,
+    }),
+    [email, userId],
+  );
 
-  const optimistic = (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
-    id: clientId,
-    sender_id: userId,
-    sender_email: email,
-    body: null,
-    kind: "text",
-    attachment_path: null,
-    attachment_url: null,
-    attachment_name: null,
-    attachment_type: null,
-    attachment_size: null,
-    duration_ms: null,
-    client_id: clientId,
-    created_at: new Date().toISOString(),
-    pending: true,
-    progress: 0,
-    ...partial,
-  });
   const sendText = (body: string) => {
     const clientId = crypto.randomUUID();
     setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
@@ -305,15 +336,17 @@ function ChatRoom({ session }: { session: Session }) {
   };
 
   const sendBlob = useCallback(
-    async (blob: Blob, name: string, kind: MessageKind, durationMs?: number) => {
-      const clientId = crypto.randomUUID();
+    async (blob: Blob, name: string, kind: MessageKind, durationMs?: number, existingClientId?: string) => {
+      const clientId = existingClientId || crypto.randomUUID();
       const localUrl = URL.createObjectURL(blob);
       const safeName = name.replace(/[^\w.\-]+/g, "_");
       const path = `${userId}/${clientId}-${safeName}`;
 
-      setMessages((prev) => [
-        ...prev,
-        optimistic(
+      void saveBlob(clientId, blob);
+
+      setMessages((prev) => {
+        const existing = prev.findIndex((m) => m.client_id === clientId || m.id === clientId);
+        const item = optimistic(
           {
             kind,
             localUrl,
@@ -323,10 +356,18 @@ function ChatRoom({ session }: { session: Session }) {
             attachment_size: blob.size,
             duration_ms: durationMs ?? null,
             progress: 0,
+            pending: true,
+            failed: false,
           },
           clientId,
-        ),
-      ]);
+        );
+        if (existing >= 0) {
+          const next = [...prev];
+          next[existing] = item;
+          return next;
+        }
+        return [...prev, item];
+      });
 
       try {
         await uploadRaw(path, blob, blob.type, (fraction) => {
@@ -334,22 +375,42 @@ function ChatRoom({ session }: { session: Session }) {
         });
         const url = await signedUrlFor(path);
         patch(clientId, { attachment_url: url, progress: 1 });
-        await insert({
+        await insert(
+          {
+            client_id: clientId,
+            kind,
+            attachment_path: path,
+            attachment_url: url,
+            attachment_name: name,
+            attachment_type: blob.type,
+            attachment_size: blob.size,
+            duration_ms: durationMs ?? null,
+          },
+          blob,
+        );
+      } catch (e) {
+        console.error("Upload failed", e);
+        patch(clientId, { failed: true, pending: false });
+        putOutbox({
+          id: clientId,
           client_id: clientId,
+          sender_id: userId,
+          sender_email: email,
+          body: null,
           kind,
           attachment_path: path,
-          attachment_url: url,
+          attachment_url: null,
           attachment_name: name,
           attachment_type: blob.type,
           attachment_size: blob.size,
           duration_ms: durationMs ?? null,
+          created_at: new Date().toISOString(),
+          failed: true,
+          pending: false,
         });
-      } catch (e) {
-        console.error("Upload failed", e);
-        patch(clientId, { failed: true, pending: false });
       }
     },
-    [insert, optimistic, patch, userId],
+    [email, insert, optimistic, patch, userId],
   );
 
   const sendFiles = (files: FileList | File[]) => {
@@ -360,15 +421,67 @@ function ChatRoom({ session }: { session: Session }) {
   };
 
   const sendVoice = (blob: Blob, durationMs: number) => {
-    void sendBlob(blob, `voice-${Date.now()}.webm`, "audio", durationMs);
+    const mime = blob.type || pickAudioMime();
+    const ext = audioExtension(mime);
+    void sendBlob(blob, `voice-${Date.now()}.${ext}`, "audio", durationMs);
   };
 
-  const react = async (messageId: string, emoji: string) => {
+  const handleRetry = useCallback(
+    async (msg: ChatMessage) => {
+      const clientId = msg.client_id || msg.id;
+      haptic("light");
+      if (msg.kind === "text" && msg.body) {
+        patch(clientId, { pending: true, failed: false });
+        await insert({ client_id: clientId, kind: "text", body: msg.body });
+      } else {
+        patch(clientId, { pending: true, failed: false, progress: 0 });
+        const blob = await getBlob(clientId);
+        if (blob && msg.attachment_name) {
+          await sendBlob(blob, msg.attachment_name, msg.kind, msg.duration_ms ?? undefined, clientId);
+        } else {
+          patch(clientId, { failed: true, pending: false });
+        }
+      }
+    },
+    [insert, patch, sendBlob],
+  );
+
+  const handleEdit = useCallback((msg: ChatMessage) => {
+    if (msg.kind === "text" && msg.body) {
+      setEditing({ id: msg.id, text: msg.body });
+    }
+  }, []);
+
+  const handleSaveEdit = useCallback(async (id: string, newText: string) => {
+    setEditing(null);
+    const now = new Date().toISOString();
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id || m.client_id === id ? { ...m, body: newText, edited_at: now } : m)),
+    );
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
+        .from("messages")
+        .update({ body: newText, edited_at: now })
+        .eq("id", id);
+    } catch (e) {
+      console.warn("Could not save edit to server", e);
+    }
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditing(null);
+  }, []);
+
+  const react = async (messageId: string, emoji: string | null) => {
     const target = messages.find((m) => m.id === messageId);
     if (!target) return;
     const current = { ...(target.reactions ?? {}) };
-    if (current[userId] === emoji) delete current[userId];
-    else current[userId] = emoji;
+    if (!emoji || current[userId] === emoji) {
+      delete current[userId];
+    } else {
+      current[userId] = emoji;
+    }
 
     setMessages((prev) =>
       prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)),
@@ -497,7 +610,7 @@ function ChatRoom({ session }: { session: Session }) {
 
                 return (
                   <MessageBubble
-                    key={msg.id}
+                    key={msg.id || msg.client_id}
                     message={msg}
                     isMine={isMine}
                     outgoing={isMine}
@@ -505,7 +618,9 @@ function ChatRoom({ session }: { session: Session }) {
                     receipt={receipt}
                     onOpenLightbox={(item) => setLightboxItem(item)}
                     onOpen={(item) => setLightboxItem(item)}
-                    onReact={(message, emoji) => void react(message.id, emoji ?? "")}
+                    onReact={(message, emoji) => void react(message.id, emoji)}
+                    onRetry={handleRetry}
+                    onEdit={handleEdit}
                   />
                 );
               })}
@@ -530,6 +645,9 @@ function ChatRoom({ session }: { session: Session }) {
           onSendText={sendText}
           onSendFiles={sendFiles}
           onSendVoice={sendVoice}
+          editing={editing}
+          onSaveEdit={handleSaveEdit}
+          onCancelEdit={handleCancelEdit}
           onTyping={() => {
             const chan = supabase.channel("care-desk-realtime");
             void chan.send({
@@ -583,5 +701,5 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-          }
-    
+                         }
+              
