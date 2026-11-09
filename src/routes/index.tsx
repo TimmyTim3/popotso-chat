@@ -92,6 +92,10 @@ function ChatRoom({ session }: { session: Session }) {
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [showGames, setShowGames] = useState(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("gameChallenge")) setShowGames(true);
+  }, []);
   const [inCall, setInCall] = useState(false);
   const [callWithVideo, setCallWithVideo] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
