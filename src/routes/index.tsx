@@ -76,7 +76,7 @@ function ChatIndex() {
   }
 
   if (!session) {
-    return <AuthScreen onSignedIn={() => {}} />;
+    return <AuthScreen />;
   }
 
   return <ChatRoom session={session} />;
@@ -113,9 +113,9 @@ function ChatRoom({ session }: { session: Session }) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any)
       .from("messages")
-      .update({ is_read: true })
+      .update({ read_at: new Date().toISOString() })
       .neq("sender_id", userId)
-      .eq("is_read", false);
+      .is("read_at", null);
   }, [userId]);
 
   const refreshMessages = useCallback(async () => {
@@ -123,49 +123,37 @@ function ChatRoom({ session }: { session: Session }) {
     const { data, error } = await (supabase as any)
       .from("messages")
       .select("*")
-      .order("created_at", { ascending: true })
-      .limit(200);
+      .order("created_at", { ascending: true });
 
-    if (error) return;
-
-    const outboxItems = loadOutbox(userId);
-
-    const dbItems: ChatMessage[] = (data ?? []).map((row: any) => ({
-      id: row.id,
-      client_id: row.client_id ?? undefined,
-      sender_id: row.sender_id,
-      sender_email: row.sender_email,
-      body: row.body,
-      kind: row.kind,
-      attachment_path: row.attachment_path,
-      attachment_url: row.attachment_url,
-      attachment_name: row.attachment_name,
-      attachment_type: row.attachment_type,
-      attachment_size: row.attachment_size,
-      duration_ms: row.duration_ms,
-      reactions: row.reactions ?? {},
-      created_at: row.created_at,
-      edited_at: row.edited_at ?? null,
-      pending: false,
-      failed: false,
-    }));
-
-    const merged = [...dbItems];
-    for (const out of outboxItems) {
-      const matchIndex = merged.findIndex(
-        (m) => m.client_id === out.client_id || m.id === out.id,
-      );
-      if (matchIndex >= 0) {
-        const matchingMessage = merged[matchIndex];
-        if (out.failed && matchingMessage) matchingMessage.failed = true;
-      } else {
-        merged.push(out);
-      }
+    if (error) {
+      console.error("Fetch messages failed:", error);
+      return;
     }
 
-    setMessages(merged);
+    const rows = (data ?? []) as ChatMessage[];
+
+    // Rehydrate signed URLs for storage media
+    const hydrated = await Promise.all(
+      rows.map(async (row) => {
+        if (row.attachment_path && !row.attachment_url) {
+          try {
+            const url = await signedUrlFor(row.attachment_path);
+            return { ...row, attachment_url: url };
+          } catch {
+            return row;
+          }
+        }
+        return row;
+      }),
+    );
+
+    const outbox = loadOutbox(userId);
+    const serverClientIds = new Set(hydrated.map((m) => m.client_id).filter(Boolean));
+    const pendingOutbox = outbox.filter((m) => !serverClientIds.has(m.client_id));
+
+    setMessages([...hydrated, ...pendingOutbox]);
     void markPartnerAsRead();
-  }, [markPartnerAsRead, userId]);
+  }, [userId, markPartnerAsRead]);
 
   useEffect(() => {
     void refreshMessages();
@@ -174,82 +162,76 @@ function ChatRoom({ session }: { session: Session }) {
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, typing]);
+  }, [messages.length, typing]);
 
-  // Realtime subscription for messages, reads, and typing
+  // Realtime channel subscription for chat updates, typing indicators, and WebRTC calls
   useEffect(() => {
     const channel = supabase
-      .channel("care-desk-room", {
-        config: { broadcast: { self: false } },
-      })
+      .channel("care-desk-chat", { config: { broadcast: { self: false } } })
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const row: any = payload.new;
-            setMessages((prev) => {
-              const exists = prev.some((m) => m.id === row.id || (row.client_id && m.client_id === row.client_id));
-              if (exists) {
-                return prev.map((m) =>
-                  m.id === row.id || (row.client_id && m.client_id === row.client_id)
-                    ? { ...m, ...row, pending: false, failed: false }
-                    : m,
-                );
-              }
-              return [
-                ...prev,
-                {
-                  id: row.id,
-                  client_id: row.client_id ?? undefined,
-                  sender_id: row.sender_id,
-                  sender_email: row.sender_email,
-                  body: row.body,
-                  kind: row.kind,
-                  attachment_path: row.attachment_path,
-                  attachment_url: row.attachment_url,
-                  attachment_name: row.attachment_name,
-                  attachment_type: row.attachment_type,
-                  attachment_size: row.attachment_size,
-                  duration_ms: row.duration_ms,
-                  reactions: row.reactions ?? {},
-                  created_at: row.created_at,
-                  edited_at: row.edited_at ?? null,
-                  pending: false,
-                  failed: false,
-                },
-              ];
-            });
-            if (row.sender_id !== userId) {
-              haptic("light");
-              void markPartnerAsRead();
+        { event: "INSERT", schema: "public", table: "messages" },
+        async (payload) => {
+          const row = payload.new as ChatMessage;
+          let finalUrl = row.attachment_url;
+          if (row.attachment_path && !finalUrl) {
+            try {
+              finalUrl = await signedUrlFor(row.attachment_path);
+            } catch {
+              // fallback
             }
-          } else if (payload.eventType === "UPDATE") {
-            const row: any = payload.new;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === row.id ? { ...m, ...row } : m)),
-            );
+          }
+          const incoming: ChatMessage = { ...row, attachment_url: finalUrl };
+
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => (m.client_id && m.client_id === row.client_id) || m.id === row.id);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = incoming;
+              return copy;
+            }
+            return [...prev, incoming];
+          });
+
+          if (row.sender_id !== userId) {
+            void markPartnerAsRead();
+            haptic("light");
           }
         },
       )
-      .on("broadcast", { event: "typing" }, (payload: any) => {
-        if (payload.payload?.email !== email) {
-          setTyping(payload.payload?.name || "Partner");
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
+        (payload) => {
+          const updated = payload.new as ChatMessage;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+          );
+        },
+      )
+      .on("broadcast", { event: "typing" }, (event) => {
+        const payload = event.payload as { email: string; name: string } | undefined;
+        if (payload?.email && payload.email !== email) {
+          setTyping(payload.name);
           if (typingTimeout.current) window.clearTimeout(typingTimeout.current);
           typingTimeout.current = window.setTimeout(() => setTyping(null), 2500);
         }
       })
-      .on("broadcast", { event: "call-offer" }, (payload: any) => {
-        const data = payload.payload;
-        if (!data || data.callerId === userId || !data.sdp) return;
-        {
+      .on("broadcast", { event: "call-offer" }, (event) => {
+        const payload = event.payload as {
+          callerId: string;
+          callerName: string;
+          sdp: RTCSessionDescriptionInit;
+          isVideo?: boolean;
+        };
+        if (payload && payload.callerId !== userId) {
           setIncomingCall({
-            callerId: data.callerId,
-            callerName: data.callerName || "Family",
-            isVideo: Boolean(data.isVideo),
-            sdp: data.sdp,
+            callerId: payload.callerId,
+            callerName: payload.callerName,
+            sdp: payload.sdp,
+            isVideo: payload.isVideo,
           });
-          setCallWithVideo(Boolean(data.isVideo));
+          setCallWithVideo(Boolean(payload.isVideo));
           haptic("medium");
         }
       })
@@ -263,43 +245,34 @@ function ChatRoom({ session }: { session: Session }) {
     };
   }, [email, markPartnerAsRead, userId]);
 
-  const patch = (clientId: string, updates: Partial<ChatMessage>) => {
+  const patch = (clientId: string, delta: Partial<ChatMessage>) => {
     setMessages((prev) =>
-      prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...updates } : m)),
+      prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...delta } : m)),
     );
   };
 
-  const handleCancelUpload = useCallback((clientId: string) => {
-    const controller = uploadControllers.current.get(clientId);
-    if (controller) {
-      controller.abort();
-      uploadControllers.current.delete(clientId);
-    }
-    deleteOutbox(clientId);
-    void deleteBlob(clientId);
-    setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
-    haptic("light");
-  }, []);
+  const insert = async (row: Partial<ChatMessage>) => {
+    const clientId = row.client_id ?? crypto.randomUUID();
+    const payload = {
+      client_id: clientId,
+      sender_id: userId,
+      sender_email: email,
+      kind: row.kind ?? "text",
+      body: row.body ?? null,
+      attachment_path: row.attachment_path ?? null,
+      attachment_url: row.attachment_url ?? null,
+      attachment_name: row.attachment_name ?? null,
+      attachment_type: row.attachment_type ?? null,
+      attachment_size: row.attachment_size ?? null,
+      duration_ms: row.duration_ms ?? null,
+      reactions: {},
+    };
 
-  const insert = async (row: Partial<ChatMessage> & { client_id: string }) => {
-    const clientId = row.client_id;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
         .from("messages")
-        .insert({
-          client_id: clientId,
-          sender_id: userId,
-          sender_email: email,
-          body: row.body ?? null,
-          kind: row.kind,
-          attachment_path: row.attachment_path ?? null,
-          attachment_url: row.attachment_url ?? null,
-          attachment_name: row.attachment_name ?? null,
-          attachment_type: row.attachment_type ?? null,
-          attachment_size: row.attachment_size ?? null,
-          duration_ms: row.duration_ms ?? null,
-        })
+        .insert(payload)
         .select()
         .single();
 
@@ -313,9 +286,10 @@ function ChatRoom({ session }: { session: Session }) {
       );
 
       void notifyPartner({
-        recipientEmail: partnerEmail,
-        senderName: isNicky ? "Mother" : "Father",
-        preview: previewFor(row.kind ?? "text", row.body ?? null),
+        data: {
+          preview: previewFor(row.kind ?? "text", row.body ?? null),
+          title: isNicky ? "Mother" : "Father",
+        },
       });
     } catch {
       patch(clientId, { failed: true, pending: false });
@@ -336,11 +310,10 @@ function ChatRoom({ session }: { session: Session }) {
         pending: false,
         failed: true,
       });
-      haptic("error");
+      haptic("warning");
     }
   };
-
-  const uploadAndSend = async (
+          const uploadAndSend = async (
     blob: Blob,
     kind: "image" | "video" | "audio" | "document",
     name: string,
@@ -373,35 +346,12 @@ function ChatRoom({ session }: { session: Session }) {
     };
 
     putOutbox(optimistic);
-
-    setMessages((prev) => {
-      const item: ChatMessage = Object.assign(
-        {
-          id: clientId,
-          client_id: clientId,
-          sender_id: userId,
-          sender_email: email,
-          localUrl,
-          created_at: new Date().toISOString(),
-          kind,
-          body: null,
-          attachment_path: path,
-          attachment_name: name,
-          attachment_type: blob.type,
-          attachment_size: blob.size,
-          duration_ms: durationMs ?? null,
-          progress: 0,
-          pending: true,
-          failed: false,
-        },
-        clientId,
-      );
-      return [...prev, item];
-    });
+    setMessages((prev) => [...prev, optimistic]);
 
     const controller = new AbortController();
     uploadControllers.current.set(clientId, controller);
-        try {
+
+    try {
       await uploadRaw(
         path,
         blob,
@@ -414,18 +364,16 @@ function ChatRoom({ session }: { session: Session }) {
       uploadControllers.current.delete(clientId);
       const url = await signedUrlFor(path);
       patch(clientId, { attachment_url: url, progress: 1 });
-      await insert(
-        {
-          client_id: clientId,
-          kind,
-          attachment_path: path,
-          attachment_url: url,
-          attachment_name: name,
-          attachment_type: blob.type,
-          attachment_size: blob.size,
-          duration_ms: durationMs ?? null,
-        },
-      );
+      await insert({
+        client_id: clientId,
+        kind,
+        attachment_path: path,
+        attachment_url: url,
+        attachment_name: name,
+        attachment_type: blob.type,
+        attachment_size: blob.size,
+        duration_ms: durationMs ?? null,
+      });
     } catch (err: any) {
       if (err?.name === "AbortError") {
         setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
@@ -450,7 +398,7 @@ function ChatRoom({ session }: { session: Session }) {
         pending: false,
         failed: true,
       });
-      haptic("error");
+      haptic("warning");
     } finally {
       uploadControllers.current.delete(clientId);
     }
@@ -472,31 +420,40 @@ function ChatRoom({ session }: { session: Session }) {
 
     putOutbox(optimistic);
     setMessages((prev) => [...prev, optimistic]);
-    await insert({ client_id: clientId, kind: "text", body: text });
+    await insert({ client_id: clientId, body: text, kind: "text" });
+  };
+
+  const handleCancelUpload = (clientId: string) => {
+    const controller = uploadControllers.current.get(clientId);
+    if (controller) {
+      controller.abort();
+      uploadControllers.current.delete(clientId);
+    }
+    setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+    deleteOutbox(clientId);
+    void deleteBlob(clientId);
+    haptic("light");
   };
 
   const handleRetry = async (msg: ChatMessage) => {
-    const clientId = msg.client_id || msg.id;
-    patch(clientId, { failed: false, pending: true });
-    if (msg.kind === "text" && msg.body) {
-      await insert({ client_id: clientId, kind: "text", body: msg.body });
+    const cid = msg.client_id || msg.id;
+    patch(cid, { failed: false, pending: true, progress: 0 });
+
+    if (msg.kind === "text") {
+      await insert({ client_id: cid, body: msg.body, kind: "text" });
+      return;
+    }
+
+    const cachedBlob = await getBlob(cid);
+    if (cachedBlob && msg.attachment_name) {
+      await uploadAndSend(cachedBlob, msg.kind, msg.attachment_name, msg.duration_ms ?? undefined);
     } else {
-      const cached = await getBlob(clientId);
-      if (cached) {
-        await uploadAndSend(
-          cached,
-          msg.kind as any,
-          msg.attachment_name ?? "file",
-          msg.duration_ms ?? undefined,
-        );
-      } else {
-        patch(clientId, { failed: true, pending: false });
-      }
+      patch(cid, { failed: true, pending: false });
     }
   };
 
-  const handleEdit = useCallback((msg: ChatMessage) => {
-    setEditingMessage(msg);
+  const handleEdit = useCallback((message: ChatMessage) => {
+    setEditingMessage(message);
   }, []);
 
   const handleSaveEdit = useCallback(
@@ -528,7 +485,7 @@ function ChatRoom({ session }: { session: Session }) {
     const msg = messages.find((m) => m.id === messageId || m.client_id === messageId);
     if (!msg) return;
 
-    const current = { ...(msg.reactions ?? {}) };
+    const current: Record<string, string> = { ...((msg.reactions as Record<string, string>) ?? {}) };
     if (current[userId] === emoji) {
       delete current[userId];
     } else {
@@ -547,8 +504,6 @@ function ChatRoom({ session }: { session: Session }) {
     if (res === "enabled") {
       setPushActive(true);
       haptic("success");
-    } else if (res !== "denied") {
-      // Alert handled directly in push.ts with exact reason
     }
   };
 
@@ -597,10 +552,9 @@ function ChatRoom({ session }: { session: Session }) {
   }, [messages, userId, email]);
 
   const partnerHasRead = useMemo(() => {
-    const partnerMessages = messages.filter((m) => m.sender_id !== userId);
-    if (!partnerMessages.length) return false;
-    return true;
-  }, [messages, userId]);
+    const lastOutgoing = lastOutgoingIndex >= 0 ? messages[lastOutgoingIndex] : null;
+    return Boolean(lastOutgoing?.read_at);
+  }, [messages, lastOutgoingIndex]);
 
   return (
     <div className="flex h-dvh flex-col bg-background font-sans text-foreground">
@@ -621,7 +575,7 @@ function ChatRoom({ session }: { session: Session }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           {/* Audio Call */}
           <button
             type="button"
@@ -711,10 +665,17 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Composer Input Area */}
       <Composer
         onSendText={handleSendText}
-        onSendMedia={async (file, kind) => {
-          await uploadAndSend(file, kind, file.name);
+        onSendFiles={(files) => {
+          files.forEach((file) => {
+            const kind = file.type.startsWith("image/")
+              ? "image"
+              : file.type.startsWith("video/")
+                ? "video"
+                : "document";
+            void uploadAndSend(file, kind, file.name);
+          });
         }}
-        onSendAudio={async (blob, durationMs) => {
+        onSendVoice={async (blob, durationMs) => {
           const mime = pickAudioMime();
           const ext = audioExtension(mime);
           await uploadAndSend(blob, "audio", `voice-note-${Date.now()}.${ext}`, durationMs);
@@ -736,17 +697,16 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Low-Data Voice & Video Call Modal */}
       {(inCall || incomingCall) && channelRef.current && (
         <VoiceCallModal
-          isOpen={inCall || Boolean(incomingCall)}
+          myId={userId}
+          myEmail={email}
+          partnerEmail={partnerEmail}
+          channel={channelRef.current}
+          initialVideo={callWithVideo}
+          incomingCall={incomingCall}
           onClose={() => {
             setInCall(false);
             setIncomingCall(null);
           }}
-          partnerName={partnerName}
-          isOutgoing={inCall && !incomingCall}
-          channel={channelRef.current}
-          userId={userId}
-          enableVideo={callWithVideo}
-          incomingOffer={incomingCall?.sdp}
         />
       )}
 
@@ -780,4 +740,4 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-    }
+}
