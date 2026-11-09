@@ -47,17 +47,21 @@ export function MessageBubble({
   const canReact = !message.pending && !message.failed;
   const canEdit = outgoing && message.kind === "text" && !message.pending && Boolean(onEdit);
 
-  // Group reactions and safely extract actual emojis (never UUIDs)
+  // Group reactions safely (handles both DB schema key=userId & key=emoji)
   const groupedReactions = useMemo(() => {
-    const raw = message.reactions ?? {};
+    const raw = (message.reactions ?? {}) as Record<string, unknown>;
     const map = new Map<string, number>();
     for (const [key, val] of Object.entries(raw)) {
-      if (typeof val === "string" && val.trim().length <= 8 && !val.startsWith("http")) {
-        // Standard DB schema: key is userId UUID, val is emoji
-        map.set(val, (map.get(val) ?? 0) + 1);
-      } else if (Array.isArray(val) && key.trim().length <= 8) {
-        // Fallback schema: key is emoji, val is array of userIds
-        map.set(key, (map.get(key) ?? 0) + val.length);
+      if (typeof val === "string") {
+        const str = val.trim();
+        if (str.length > 0 && str.length <= 8 && !str.startsWith("http")) {
+          map.set(str, (map.get(str) ?? 0) + 1);
+        }
+      } else if (Array.isArray(val)) {
+        const str = key.trim();
+        if (str.length > 0 && str.length <= 8) {
+          map.set(str, (map.get(str) ?? 0) + val.length);
+        }
       }
     }
     return Array.from(map.entries());
@@ -101,26 +105,7 @@ export function MessageBubble({
     closeMenu();
   };
 
-  // Double tap to love (heart)
-  const handleBubbleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const now = Date.now();
-    const DOUBLE_TAP_DELAY = 280;
-
-    if (now - lastTap.current < DOUBLE_TAP_DELAY && canReact) {
-      lastTap.current = 0;
-      haptic("medium");
-      onReact?.("❤️");
-      return;
-    }
-    lastTap.current = now;
-
-    if (!uploading && !longPressed.current) {
-      setShowTime((prev) => !prev);
-    }
-    longPressed.current = false;
-  };
-
+  // Double-tap sends a quick Heart reaction
   const handleTouchStart = () => {
     longPressed.current = false;
     longPressTimer.current = window.setTimeout(() => {
@@ -136,15 +121,33 @@ export function MessageBubble({
     }
   };
 
+  const handleBubbleClick = (e: React.MouseEvent) => {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return;
+    }
+
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+    if (now - lastTap.current < DOUBLE_TAP_DELAY && canReact) {
+      e.stopPropagation();
+      handleReaction("❤️");
+      lastTap.current = 0;
+      return;
+    }
+    lastTap.current = now;
+    setShowTime((prev) => !prev);
+  };
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     openMenu();
   };
 
-  const receipt = outgoing && !message.pending && !message.failed ? (
+  const receipt = outgoing ? (
     isRead ? (
       <span className="flex items-center text-primary font-medium">
-        <CheckCheck className="size-3 stroke-[2.5]" />
+        <CheckCheck className="size-3 stroke-[2.4]" />
         <span className="ml-0.5">Read</span>
       </span>
     ) : (
@@ -217,7 +220,8 @@ export function MessageBubble({
               ))}
             </div>
           )}
-              {/* Action Row */}
+
+          {/* Action Row */}
           <div className="flex items-center gap-1 pt-0.5">
             {message.body && (
               <button
@@ -260,14 +264,15 @@ export function MessageBubble({
           </div>
         </div>
       )}
-
-      {/* Bubble Container */}
+                {/* Bubble Container: overflow-visible ensures tapbacks are never clipped */}
       <div
         onClick={handleBubbleClick}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         onContextMenu={handleContextMenu}
-        className={`relative max-w-[82%] select-text overflow-hidden rounded-[20px] transition active:scale-[0.99] ${
+        className={`relative max-w-[82%] select-text overflow-visible rounded-[20px] transition active:scale-[0.99] ${
+          groupedReactions.length > 0 ? "mt-2.5" : ""
+        } ${
           mediaOnly
             ? "p-0 bg-transparent"
             : outgoing
@@ -275,11 +280,15 @@ export function MessageBubble({
             : "bg-bubble-in text-bubble-in-foreground px-3.5 py-2 shadow-sm"
         }`}
       >
-        {/* Floating iOS Tapback Badge on top corner of bubble */}
+        {/* Floating iOS 18 Tapback Badge on top shoulder of bubble */}
         {groupedReactions.length > 0 && (
           <div
-            className={`absolute -top-3 z-10 flex items-center gap-0.5 rounded-full border-2 border-background bg-secondary px-1.5 py-0.5 text-xs shadow-sm ${
-              outgoing ? "-left-2" : "-right-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              openMenu();
+            }}
+            className={`absolute -top-2.5 z-20 flex cursor-pointer items-center gap-1 rounded-full border border-border/80 bg-secondary/95 px-2 py-0.5 text-xs shadow-md backdrop-blur-md transition-transform hover:scale-105 active:scale-95 ${
+              outgoing ? "-left-1.5" : "-right-1.5"
             }`}
           >
             {groupedReactions.map(([emoji, count]) => (
@@ -388,7 +397,7 @@ export function MessageBubble({
             <FileText className="size-5 shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-semibold">{message.attachment_name ?? "Document"}</p>
-              <p className="text-[10px] text-muted-foreground">{formatBytes(message.attachment_size)}</p>
+              <p className="text-[10px] text-muted-foreground">{formatBytes(message.attachment_size ?? null)}</p>
             </div>
             {uploading && (
               <ProgressRing
@@ -439,5 +448,4 @@ export function MessageBubble({
       </div>
     </div>
   );
-          }
-            
+}
