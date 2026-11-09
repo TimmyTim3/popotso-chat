@@ -1,4 +1,16 @@
-import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Wifi, Circle, Download, Trash2 } from "lucide-react";
+import {
+  Camera,
+  CameraOff,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneOff,
+  RefreshCw,
+  Video,
+  Volume2,
+  VolumeX,
+  Wifi,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -10,7 +22,13 @@ interface VoiceCallModalProps {
   myEmail: string;
   partnerEmail: MemberEmail;
   channel: RealtimeChannel;
-  incomingCall: { callerId: string; callerName: string; sdp: RTCSessionDescriptionInit } | null;
+  initialVideo?: boolean;
+  incomingCall: {
+    callerId: string;
+    callerName: string;
+    sdp: RTCSessionDescriptionInit;
+    isVideo?: boolean;
+  } | null;
   onClose: () => void;
 }
 
@@ -21,36 +39,36 @@ export function VoiceCallModal({
   myEmail,
   partnerEmail,
   channel,
+  initialVideo = false,
   incomingCall,
   onClose,
 }: VoiceCallModalProps) {
   const isCaller = !incomingCall;
   const [status, setStatus] = useState<CallStatus>(isCaller ? "connecting" : "incoming");
+  const [isVideo, setIsVideo] = useState(incomingCall ? Boolean(incomingCall.isVideo) : initialVideo);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [muted, setMuted] = useState(false);
+  const [videoMuted, setVideoMuted] = useState(false);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
-  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const oscRef = useRef<OscillatorNode | null>(null);
-  const gainRef = useRef<GainNode | null>(null);
   const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vibrateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const mixedStreamRef = useRef<MediaStream | null>(null);
 
   const partnerLabel = MEMBERS[partnerEmail] ?? "Family";
 
-  // Proper intermittent phone-style ringtone (tone-silence pattern)
-  const startRingtone = useCallback(() => {
-    stopRingtone(); // safety
+  // Realistic phone ringtone synthesizer (Web Audio API) + physical phone vibration
+  const startRingtone = useCallback((isIncoming: boolean) => {
+    stopRingtone();
     try {
       const AudioCtx =
         window.AudioContext ||
@@ -59,30 +77,44 @@ export function VoiceCallModal({
 
       const ctx = new AudioCtx();
       audioCtxRef.current = ctx;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = 440;
-      gain.gain.value = 0; // start silent
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      oscRef.current = osc;
-      gainRef.current = gain;
 
-      // Classic ring pattern: 1s on, 2s off
+      // Tone pattern: Outgoing is standard 440Hz European/US ring; Incoming is melodic dual-tone chime
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = "sine";
+      osc2.type = "sine";
+      osc1.frequency.value = isIncoming ? 440 : 425;
+      osc2.frequency.value = isIncoming ? 554 : 425; // Melodic major third for incoming call
+      gain.gain.value = 0;
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+      osc1.start();
+      osc2.start();
+
       let on = false;
       const pulse = () => {
-        if (!gainRef.current || !audioCtxRef.current) return;
+        if (!gain || !ctx) return;
         on = !on;
-        const now = audioCtxRef.current.currentTime;
-        gainRef.current.gain.cancelScheduledValues(now);
-        gainRef.current.gain.setValueAtTime(on ? 0.12 : 0, now);
+        const now = ctx.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(on ? 0.15 : 0, now);
       };
-      pulse(); // first pulse
-      ringIntervalRef.current = setInterval(pulse, 1000);
+      pulse();
+      ringIntervalRef.current = setInterval(pulse, isIncoming ? 800 : 1500);
+
+      // Physical vibration: standard phone call buzz
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate([400, 200, 400, 1000]);
+        vibrateIntervalRef.current = setInterval(() => {
+          navigator.vibrate([400, 200, 400, 1000]);
+        }, 2000);
+      }
     } catch {
-      // autoplay / permission restriction – silent fail
+      // AudioContext autoplay or permission restriction
     }
   }, []);
 
@@ -92,55 +124,45 @@ export function VoiceCallModal({
         clearInterval(ringIntervalRef.current);
         ringIntervalRef.current = null;
       }
-      if (oscRef.current) {
-        oscRef.current.stop();
-        oscRef.current.disconnect();
-        oscRef.current = null;
+      if (vibrateIntervalRef.current) {
+        clearInterval(vibrateIntervalRef.current);
+        vibrateIntervalRef.current = null;
       }
-      if (gainRef.current) {
-        gainRef.current.disconnect();
-        gainRef.current = null;
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate(0);
       }
       if (audioCtxRef.current) {
         void audioCtxRef.current.close();
         audioCtxRef.current = null;
       }
     } catch {
-      // ignore cleanup errors
+      // Ignore cleanup error
     }
   }, []);
 
-  // Clamp SDP to 16 kbps mono Opus for ultra-low data
-  const applyLowBitrateSDP = (sdp: string) =>
-    sdp.replace(
+  // Standard recommended WebRTC SDP clamping: Opus 24kbps audio + ~450kbps HD video
+  const applyBalancedSDP = (sdp: string, hasVideo: boolean) => {
+    let result = sdp.replace(
       /a=mid:audio\r\n/gi,
-      "a=mid:audio\r\na=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=16000\r\n",
+      "a=mid:audio\r\na=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000\r\n",
     );
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
+    if (hasVideo) {
+      result = result.replace(/(m=video [^\r\n]+\r\n)/gi, "$1b=AS:450\r\n");
     }
-    setIsRecording(false);
-  }, []);
+    return result;
+  };
 
   const endCall = useCallback(
     (notify = true) => {
-      // 1. Stop everything audio-related
       stopRingtone();
-      stopRecording();
-
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
 
-      // 2. Stop all media tracks
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       remoteStreamRef.current?.getTracks().forEach((t) => t.stop());
-      mixedStreamRef.current?.getTracks().forEach((t) => t.stop());
 
-      // 3. Close peer connection
       if (pcRef.current) {
         pcRef.current.close();
         pcRef.current = null;
@@ -148,7 +170,6 @@ export function VoiceCallModal({
 
       localStreamRef.current = null;
       remoteStreamRef.current = null;
-      mixedStreamRef.current = null;
 
       if (notify) {
         void channel.send({
@@ -159,132 +180,92 @@ export function VoiceCallModal({
       }
 
       setStatus("ended");
-      // Keep the modal open a moment if there is a recording so the user can save it
-      if (!recordingBlob) {
-        setTimeout(() => onClose(), 900);
-      }
+      setTimeout(() => onClose(), 800);
     },
-    [channel, myId, onClose, stopRingtone, stopRecording, recordingBlob],
+    [channel, myId, onClose, stopRingtone],
   );
 
-  const startRecording = useCallback(async () => {
-    if (!localStreamRef.current) return;
-
-    try {
-      // Mix local + remote into one stream for recording
-      const mixed = new MediaStream();
-      localStreamRef.current.getAudioTracks().forEach((t) => mixed.addTrack(t));
-      if (remoteStreamRef.current) {
-        remoteStreamRef.current.getAudioTracks().forEach((t) => mixed.addTrack(t));
-      }
-      mixedStreamRef.current = mixed;
-
-      recordedChunksRef.current = [];
-      const recorder = new MediaRecorder(mixed, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
+  const setupPeerConnection = useCallback(
+    async (enableVideo: boolean, face: "user" | "environment") => {
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
       });
-      mediaRecorderRef.current = recorder;
+      pcRef.current = pc;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          void channel.send({
+            type: "broadcast",
+            event: "call-ice",
+            payload: { candidate: event.candidate, from: myId },
+          });
+        }
       };
 
-      recorder.onstop = () => {
-        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
-        setRecordingBlob(blob);
-        const url = URL.createObjectURL(blob);
-        setRecordingUrl(url);
-        setIsRecording(false);
+      pc.ontrack = (event) => {
+        stopRingtone();
+        setStatus("connected");
+        const stream = event.streams[0] ?? null;
+        remoteStreamRef.current = stream;
+
+        if (remoteVideoRef.current && stream) {
+          remoteVideoRef.current.srcObject = stream;
+          void remoteVideoRef.current.play().catch(() => {});
+        }
+        if (remoteAudioRef.current && stream) {
+          remoteAudioRef.current.srcObject = stream;
+          void remoteAudioRef.current.play().catch(() => {});
+        }
       };
 
-      recorder.start(1000); // collect every second
-      setIsRecording(true);
-      haptic("medium");
-    } catch (err) {
-      console.error("Recording failed", err);
-      setIsRecording(false);
-    }
-  }, []);
+      // Balanced HD video constraints: 640x480 or 720p @ 24fps
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+        video: enableVideo
+          ? {
+              width: { ideal: 640, max: 1280 },
+              height: { ideal: 480, max: 720 },
+              frameRate: { ideal: 24, max: 30 },
+              facingMode: face,
+            }
+          : false,
+      });
 
-  const saveRecordingToPhone = () => {
-    if (!recordingBlob || !recordingUrl) return;
-    const a = document.createElement("a");
-    a.href = recordingUrl;
-    a.download = `popotso-call-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    haptic("success");
-  };
-
-  const deleteRecording = () => {
-    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-    setRecordingBlob(null);
-    setRecordingUrl(null);
-    haptic("light");
-    // Now that recording is gone we can close the modal
-    setTimeout(() => onClose(), 300);
-  };
-
-  const setupPeerConnection = useCallback(async () => {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    });
-    pcRef.current = pc;
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        void channel.send({
-          type: "broadcast",
-          event: "call-ice",
-          payload: { candidate: event.candidate, from: myId },
-        });
+      localStreamRef.current = stream;
+      if (localVideoRef.current && enableVideo) {
+        localVideoRef.current.srcObject = stream;
+        void localVideoRef.current.play().catch(() => {});
       }
-    };
 
-    pc.ontrack = (event) => {
-      stopRingtone();
-      setStatus("connected");
-      remoteStreamRef.current = event.streams[0] ?? null;
-      if (remoteAudioRef.current && event.streams[0]) {
-        remoteAudioRef.current.srcObject = event.streams[0];
-        void remoteAudioRef.current.play().catch(() => {});
-      }
-    };
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-      video: false,
-    });
-    localStreamRef.current = stream;
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-    return pc;
-  }, [channel, myId, stopRingtone]);
-
-  // Caller flow
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      return pc;
+    },
+    [channel, myId, stopRingtone],
+  );
+      // Caller flow
   useEffect(() => {
-    if (!isCaller) return;
+    if (!isCaller) {
+      startRingtone(true); // Incoming ring chime
+      return;
+    }
 
     setStatus("connecting");
-    startRingtone();
+    startRingtone(false); // Outgoing dialing ring
 
     void (async () => {
       try {
-        const pc = await setupPeerConnection();
+        const pc = await setupPeerConnection(isVideo, facingMode);
         const offer = await pc.createOffer();
-        const lowDataSDP = applyLowBitrateSDP(offer.sdp ?? "");
-        const finalOffer = { type: offer.type, sdp: lowDataSDP };
+        const balancedSDP = applyBalancedSDP(offer.sdp ?? "", isVideo);
+        const finalOffer = { type: offer.type, sdp: balancedSDP };
         await pc.setLocalDescription(finalOffer);
 
         void channel.send({
@@ -294,32 +275,32 @@ export function VoiceCallModal({
             callerId: myId,
             callerName: MEMBERS[myEmail as MemberEmail] ?? "Father",
             sdp: finalOffer,
+            isVideo,
           },
         });
 
-        // Offer is out → now we are ringing the other side
         setStatus("ringing");
-      } catch {
+      } catch (err) {
+        console.error("Call setup error", err);
         endCall(true);
       }
     })();
 
     return () => {
-      // cleanup if component unmounts while still dialing
       stopRingtone();
     };
-  }, [endCall, isCaller, myEmail, myId, setupPeerConnection, startRingtone, stopRingtone, channel]);
+  }, [endCall, facingMode, isCaller, isVideo, myEmail, myId, setupPeerConnection, startRingtone, stopRingtone, channel]);
 
   const acceptCall = async () => {
     if (!incomingCall) return;
     haptic("success");
     stopRingtone();
     try {
-      const pc = await setupPeerConnection();
+      const pc = await setupPeerConnection(isVideo, facingMode);
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.sdp));
       const answer = await pc.createAnswer();
-      const lowDataSDP = applyLowBitrateSDP(answer.sdp ?? "");
-      const finalAnswer = { type: answer.type, sdp: lowDataSDP };
+      const balancedSDP = applyBalancedSDP(answer.sdp ?? "", isVideo);
+      const finalAnswer = { type: answer.type, sdp: balancedSDP };
       await pc.setLocalDescription(finalAnswer);
 
       void channel.send({
@@ -377,29 +358,28 @@ export function VoiceCallModal({
     channel.on("broadcast", { event: "call-hangup" }, handleHangup);
 
     return () => {
-      // Supabase Realtime does not expose a clean off() for every listener in all versions,
-      // but the component unmount will stop everything via endCall / stopRingtone.
+      stopRingtone();
     };
   }, [channel, endCall, myId, status, stopRingtone]);
-
-  // Hard cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopRingtone();
-      stopRecording();
-      localStreamRef.current?.getTracks().forEach((t) => t.stop());
-      pcRef.current?.close();
-      if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-    };
-  }, [stopRingtone, stopRecording, recordingUrl]);
 
   const toggleMute = () => {
     haptic("light");
     if (localStreamRef.current) {
-      const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setMuted(!audioTrack.enabled);
+      const track = localStreamRef.current.getAudioTracks()[0];
+      if (track) {
+        track.enabled = !track.enabled;
+        setMuted(!track.enabled);
+      }
+    }
+  };
+
+  const toggleVideoMute = () => {
+    haptic("light");
+    if (localStreamRef.current) {
+      const track = localStreamRef.current.getVideoTracks()[0];
+      if (track) {
+        track.enabled = !track.enabled;
+        setVideoMuted(!track.enabled);
       }
     }
   };
@@ -412,148 +392,192 @@ export function VoiceCallModal({
     }
   };
 
+  const flipCamera = async () => {
+    haptic("medium");
+    const nextMode = facingMode === "user" ? "environment" : "user";
+    setFacingMode(nextMode);
+
+    if (localStreamRef.current && pcRef.current) {
+      try {
+        const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: nextMode, width: { ideal: 640 }, height: { ideal: 480 } },
+        });
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (newVideoTrack && oldVideoTrack) {
+          const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
+          if (sender) await sender.replaceTrack(newVideoTrack);
+          localStreamRef.current.removeTrack(oldVideoTrack);
+          oldVideoTrack.stop();
+          localStreamRef.current.addTrack(newVideoTrack);
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not flip camera", err);
+      }
+    }
+  };
+
   const formatCallTime = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
     const secs = totalSec % 60;
-    return `\( {mins}: \){secs.toString().padStart(2, "0")}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const dataUsedMB = ((seconds * 2) / 1024).toFixed(2);
+  const dataUsedMB = isVideo
+    ? ((seconds * 45) / 1024).toFixed(1)
+    : ((seconds * 2.5) / 1024).toFixed(2);
 
   const statusText =
     status === "connecting"
       ? "Connecting..."
       : status === "ringing"
-        ? "Ringing..."
+        ? "Ringing phone..."
         : status === "incoming"
-          ? "Incoming Voice Call..."
+          ? isVideo ? "Incoming Video Call..." : "Incoming Voice Call..."
           : status === "connected"
             ? formatCallTime(seconds)
             : "Call Ended";
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-background/95 p-6 backdrop-blur-2xl animate-fade-up">
+    <div className="fixed inset-0 z-50 flex flex-col justify-between bg-black text-white backdrop-blur-2xl">
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
-      <div className="mt-12 flex flex-col items-center text-center">
-        <div className="mb-4 flex size-24 items-center justify-center rounded-full bg-primary/10 ring-4 ring-primary/20">
-          <Phone className={`size-10 text-primary ${status === "ringing" || status === "incoming" ? "animate-pulse" : ""}`} />
-        </div>
-        <h2 className="text-2xl font-bold tracking-tight">{partnerLabel}</h2>
-        <p className="mt-1 text-sm font-medium text-muted-foreground">{statusText}</p>
+      {/* Main Video View (Remote partner) or Audio Avatar */}
+      <div className="relative flex flex-1 items-center justify-center overflow-hidden">
+        {isVideo && status === "connected" ? (
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="size-full object-cover"
+          />
+        ) : (
+          <div className="flex flex-col items-center text-center p-6">
+            <div className="mb-4 flex size-28 items-center justify-center rounded-full bg-primary/20 ring-4 ring-primary/40">
+              {isVideo ? (
+                <Video className={`size-12 text-primary ${status === "ringing" || status === "incoming" ? "animate-pulse" : ""}`} />
+              ) : (
+                <Phone className={`size-12 text-primary ${status === "ringing" || status === "incoming" ? "animate-pulse" : ""}`} />
+              )}
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight">{partnerLabel}</h2>
+            <p className="mt-1 text-sm font-medium text-white/70">{statusText}</p>
 
-        <div className="mt-4 flex items-center gap-1.5 rounded-full bg-secondary/80 px-3.5 py-1 text-xs font-medium text-secondary-foreground">
-          <Wifi className="size-3.5 text-primary" />
-          <span>
-            {status === "connected"
-              ? `${dataUsedMB} MB used (Opus 16kbps HD)`
-              : "\~7.2 MB per hour (95% cheaper than cellular calls)"}
-          </span>
-        </div>
+            <div className="mt-4 flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-1 text-xs font-medium text-white/90 backdrop-blur-md">
+              <Wifi className="size-3.5 text-primary" />
+              <span>
+                {status === "connected"
+                  ? `${dataUsedMB} MB used (${isVideo ? "HD Balanced 450kbps" : "Opus 24kbps"})`
+                  : isVideo
+                    ? "~160 MB / hour (85% cheaper than WhatsApp)"
+                    : "~9 MB / hour (95% cheaper than cellular)"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Floating Picture-in-Picture Local Self Video */}
+        {isVideo && (
+          <div className="absolute right-4 top-14 size-28 sm:size-36 overflow-hidden rounded-2xl border-2 border-white/20 bg-neutral-900 shadow-2xl">
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="size-full object-cover"
+            />
+          </div>
+        )}
       </div>
 
-      {/* Recording result panel (shown after call ends) */}
-      {status === "ended" && recordingBlob && (
-        <div className="mb-6 w-full max-w-xs rounded-2xl border bg-card p-4 shadow-lg">
-          <p className="mb-3 text-center text-sm font-medium">Call recording ready</p>
-          <audio controls src={recordingUrl ?? undefined} className="mb-3 w-full" />
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={saveRecordingToPhone}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary py-2.5 text-sm font-medium text-primary-foreground"
-            >
-              <Download className="size-4" />
-              Save to phone
-            </button>
-            <button
-              type="button"
-              onClick={deleteRecording}
-              className="flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm"
-            >
-              <Trash2 className="size-4" />
-              Delete
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="mb-12 w-full max-w-xs">
+      {/* Call Controls Footer */}
+      <div className="p-6 pb-10">
         {status === "incoming" ? (
-          <div className="flex items-center justify-around gap-6">
+          <div className="flex items-center justify-around">
             <button
               type="button"
-              aria-label="Decline call"
               onClick={() => endCall(true)}
-              className="flex size-16 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-lg active:scale-95 transition-transform"
+              className="flex size-16 items-center justify-center rounded-full bg-red-600 text-white shadow-lg active:scale-95 transition-transform"
+              aria-label="Decline call"
             >
               <PhoneOff className="size-7" />
             </button>
             <button
               type="button"
+              onClick={acceptCall}
+              className="flex size-16 items-center justify-center rounded-full bg-green-600 text-white shadow-lg active:scale-95 transition-transform animate-bounce"
               aria-label="Accept call"
-              onClick={() => void acceptCall()}
-              className="flex size-16 items-center justify-center rounded-full bg-green-500 text-white shadow-lg active:scale-95 transition-transform"
             >
               <Phone className="size-7" />
             </button>
           </div>
-        ) : status === "ended" && !recordingBlob ? (
-          <p className="text-center text-sm text-muted-foreground">Closing…</p>
         ) : (
-          <div className="flex flex-col items-center gap-6">
-            {status === "connected" && (
-              <div className="flex items-center justify-center gap-5">
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            <button
+              type="button"
+              onClick={toggleMute}
+              className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
+                muted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
+              }`}
+              aria-label={muted ? "Unmute microphone" : "Mute microphone"}
+              title={muted ? "Unmute" : "Mute"}
+            >
+              {muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
+            </button>
+
+            {isVideo && (
+              <>
                 <button
                   type="button"
-                  aria-label={muted ? "Unmute" : "Mute"}
-                  onClick={toggleMute}
-                  className={`flex size-14 items-center justify-center rounded-full border transition-all active:scale-95 ${
-                    muted ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground"
+                  onClick={toggleVideoMute}
+                  className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
+                    videoMuted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
                   }`}
+                  aria-label={videoMuted ? "Turn on camera" : "Turn off camera"}
+                  title={videoMuted ? "Camera Off" : "Camera On"}
                 >
-                  {muted ? <MicOff className="size-6" /> : <Mic className="size-6" />}
+                  {videoMuted ? <CameraOff className="size-5" /> : <Camera className="size-5" />}
                 </button>
 
                 <button
                   type="button"
-                  aria-label={isRecording ? "Stop recording" : "Start recording"}
-                  onClick={() => (isRecording ? stopRecording() : void startRecording())}
-                  className={`flex size-14 items-center justify-center rounded-full border transition-all active:scale-95 ${
-                    isRecording
-                      ? "border-red-500 bg-red-500 text-white animate-pulse"
-                      : "border-border bg-card text-foreground"
-                  }`}
+                  onClick={flipCamera}
+                  className="flex size-12 items-center justify-center rounded-full bg-white/20 text-white transition-colors hover:bg-white/30 active:scale-95"
+                  aria-label="Flip camera front/back"
+                  title="Flip camera"
                 >
-                  <Circle className={`size-6 ${isRecording ? "fill-current" : ""}`} />
+                  <RefreshCw className="size-5" />
                 </button>
-
-                <button
-                  type="button"
-                  aria-label={speakerMuted ? "Unmute speaker" : "Mute speaker"}
-                  onClick={toggleSpeaker}
-                  className={`flex size-14 items-center justify-center rounded-full border transition-all active:scale-95 ${
-                    speakerMuted ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground"
-                  }`}
-                >
-                  {speakerMuted ? <VolumeX className="size-6" /> : <Volume2 className="size-6" />}
-                </button>
-              </div>
+              </>
             )}
 
-            {(status === "connecting" || status === "ringing" || status === "connected") && (
-              <button
-                type="button"
-                aria-label="End call"
-                onClick={() => endCall(true)}
-                className="flex size-16 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-lg active:scale-95 transition-transform"
-              >
-                <PhoneOff className="size-7" />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={toggleSpeaker}
+              className={`flex size-12 items-center justify-center rounded-full transition-colors active:scale-95 ${
+                speakerMuted ? "bg-red-600 text-white" : "bg-white/20 text-white hover:bg-white/30"
+              }`}
+              aria-label={speakerMuted ? "Unmute speaker" : "Mute speaker"}
+              title={speakerMuted ? "Muted Speaker" : "Speaker On"}
+            >
+              {speakerMuted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => endCall(true)}
+              className="flex size-14 items-center justify-center rounded-full bg-red-600 text-white shadow-xl transition-transform active:scale-95"
+              aria-label="Hang up call"
+              title="End call"
+            >
+              <PhoneOff className="size-6" />
+            </button>
           </div>
         )}
       </div>
     </div>
   );
-          }
+}
