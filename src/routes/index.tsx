@@ -1,71 +1,55 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Bell, BellRing, Info, LogOut, Phone, Video, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
 import { Composer } from "@/components/chat/Composer";
-import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
+import { Lightbox } from "@/components/chat/Lightbox";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  ATTRIBUTION,
   audioExtension,
-  formatClock,
   formatDayLabel,
-  kindForFile,
   pickAudioMime,
   previewFor,
   signedUrlFor,
   uploadRaw,
   type ChatMessage,
   type MemberEmail,
-  type MessageKind,
 } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
-import { getBlob, loadOutbox, putOutbox, removeOutbox, saveBlob } from "@/lib/outbox";
-import { currentPushEnabled, enablePush } from "@/lib/push";
+import { deleteBlob, deleteOutbox, getBlob, loadOutbox, putBlob, putOutbox } from "@/lib/outbox";
 import { notifyPartner } from "@/lib/push.functions";
+import { currentPushEnabled, enablePush } from "@/lib/push";
+
+const ATTRIBUTION =
+  "System Architecture & Platform Engineering by Tim Web Development and Automation Agency. Designed exclusively for secure, high-integrity asynchronous communication and child care logistics.";
 
 export const Route = createFileRoute("/")({
+  component: ChatIndex,
   head: () => ({
+    title: "Popotso Care Desk",
     meta: [
-      { title: "Popotso Care Desk — Private Family Messaging" },
       {
         name: "description",
         content:
-          "A private, two-person message line for child care logistics: full-quality photos, video, documents and voice notes with no compression.",
+          "Secure, high-integrity asynchronous communication and child care logistics for Popotso.",
       },
-      { property: "og:title", content: "Popotso Care Desk — Private Family Messaging" },
+      { property: "og:title", content: "Popotso Care Desk" },
       {
         property: "og:description",
         content:
-          "Secure asynchronous messaging for two accounts, with uncompressed media and voice notes.",
+          "Secure, high-integrity asynchronous communication and child care logistics for Popotso.",
       },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:card", content: "summary" },
     ],
   }),
-  component: Index,
 });
 
-function useSystemTheme() {
-  useEffect(() => {
-    const root = document.documentElement;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = (dark: boolean) => {
-      root.classList.toggle("dark", dark);
-    };
-    apply(media.matches);
-    const handler = (e: MediaQueryListEvent) => apply(e.matches);
-    media.addEventListener("change", handler);
-    return () => media.removeEventListener("change", handler);
-  }, []);
-}
-
-function Index() {
-  useSystemTheme();
+function ChatIndex() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -74,16 +58,19 @@ function Index() {
       setSession(data.session);
       setLoading(false);
     });
+
     const { data: sub } = supabase.auth.onAuthStateChange((_event, current) => {
       setSession(current);
+      setLoading(false);
     });
+
     return () => sub.subscription.unsubscribe();
   }, []);
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center text-muted-foreground text-[15px]">
-        Loading Popotso…
+      <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
+        <span className="text-sm">Loading Popotso Care Desk...</span>
       </div>
     );
   }
@@ -94,225 +81,204 @@ function Index() {
 
 function ChatRoom({ session }: { session: Session }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [lightboxItem, setLightboxItem] = useState<LightboxItem | null>(null);
+  const [typing, setTyping] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ url: string; kind: "image" | "video" } | null>(null);
   const [showAttribution, setShowAttribution] = useState(false);
   const [pushActive, setPushActive] = useState(false);
-  const [partnerTyping, setPartnerTyping] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [inCall, setInCall] = useState(false);
   const [callWithVideo, setCallWithVideo] = useState(false);
   const [incomingCall, setIncomingCall] = useState<{
-    callerId: string;
-    callerName: string;
-    sdp: RTCSessionDescriptionInit;
+    caller: string;
     isVideo?: boolean;
+    sdp: RTCSessionDescriptionInit;
   } | null>(null);
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const callChannelRef = useRef<RealtimeChannel | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const typingTimeout = useRef<number | null>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const uploadControllers = useRef<Map<string, AbortController>>(new Map());
 
   const userId = session.user.id;
-  const email = session.user.email ?? "";
+  const email = (session.user.email ?? "") as MemberEmail;
   const isNicky = email === "nicky@popotso.app" || email === "mother@popotso.app";
   const partnerEmail: MemberEmail = isNicky ? "tim@popotso.app" : "nicky@popotso.app";
+  const partnerName = isNicky ? "Father" : "Mother";
 
-  const markAsRead = useCallback(async () => {
-    const now = new Date().toISOString();
+  const markPartnerAsRead = useCallback(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any)
       .from("messages")
-      .update({ read_at: now })
+      .update({ is_read: true })
       .neq("sender_id", userId)
-      .is("read_at", null);
+      .eq("is_read", false);
   }, [userId]);
 
-  useEffect(() => {
-    void currentPushEnabled().then(setPushActive);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void supabase
+  const refreshMessages = useCallback(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
       .from("messages")
       .select("*")
       .order("created_at", { ascending: true })
-      .then(async ({ data, error }) => {
-        if (!active || error || !data) return;
-        const resolved = await Promise.all(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          data.map(async (row: any) => {
-            const m = row as ChatMessage;
-            if (m.attachment_path && !m.attachment_url) {
-              try {
-                m.attachment_url = await signedUrlFor(m.attachment_path);
-              } catch (e) {
-                console.error("Failed to sign URL", e);
-              }
-            }
-            return m;
-          }),
-        );
-        if (active) {
-          const localOutbox = loadOutbox(userId);
-          const dbClientIds = new Set(resolved.map((m) => m.client_id).filter(Boolean));
-          const unsent = localOutbox.filter((m) => !m.client_id || !dbClientIds.has(m.client_id));
-          setMessages([...resolved, ...unsent]);
-          void markAsRead();
-        }
-      });
+      .limit(200);
 
+    if (error) return;
+
+    const outboxItems = await loadOutbox();
+
+    const dbItems: ChatMessage[] = (data ?? []).map((row: any) => ({
+      id: row.id,
+      client_id: row.client_id ?? undefined,
+      sender_id: row.sender_id,
+      sender_email: row.sender_email,
+      body: row.body,
+      kind: row.kind,
+      attachment_path: row.attachment_path,
+      attachment_url: row.attachment_url,
+      attachment_name: row.attachment_name,
+      attachment_type: row.attachment_type,
+      attachment_size: row.attachment_size,
+      duration_ms: row.duration_ms,
+      reactions: row.reactions ?? {},
+      created_at: row.created_at,
+      edited_at: row.edited_at ?? null,
+      pending: false,
+      failed: false,
+    }));
+
+    const merged = [...dbItems];
+    for (const out of outboxItems) {
+      const matchIndex = merged.findIndex(
+        (m) => m.client_id === out.client_id || m.id === out.id,
+      );
+      if (matchIndex >= 0) {
+        if (out.failed) merged[matchIndex].failed = true;
+      } else {
+        merged.push(out);
+      }
+    }
+
+    setMessages(merged);
+    void markPartnerAsRead();
+  }, [markPartnerAsRead]);
+
+  useEffect(() => {
+    void refreshMessages();
+    void currentPushEnabled().then(setPushActive);
+  }, [refreshMessages]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, typing]);
+
+  // Realtime subscription for messages, reads, and typing
+  useEffect(() => {
     const channel = supabase
-      .channel("care-desk-realtime")
+      .channel("care-desk-room", {
+        config: { broadcast: { self: false } },
+      })
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (payload: any) => {
-          const row = payload.new as ChatMessage;
-          if (row.attachment_path && !row.attachment_url) {
-            try {
-              row.attachment_url = await signedUrlFor(row.attachment_path);
-            } catch (e) {
-              console.error(e);
+        { event: "*", schema: "public", table: "messages" },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const row: any = payload.new;
+            setMessages((prev) => {
+              const exists = prev.some((m) => m.id === row.id || (row.client_id && m.client_id === row.client_id));
+              if (exists) {
+                return prev.map((m) =>
+                  m.id === row.id || (row.client_id && m.client_id === row.client_id)
+                    ? { ...m, ...row, pending: false, failed: false }
+                    : m,
+                );
+              }
+              return [
+                ...prev,
+                {
+                  id: row.id,
+                  client_id: row.client_id ?? undefined,
+                  sender_id: row.sender_id,
+                  sender_email: row.sender_email,
+                  body: row.body,
+                  kind: row.kind,
+                  attachment_path: row.attachment_path,
+                  attachment_url: row.attachment_url,
+                  attachment_name: row.attachment_name,
+                  attachment_type: row.attachment_type,
+                  attachment_size: row.attachment_size,
+                  duration_ms: row.duration_ms,
+                  reactions: row.reactions ?? {},
+                  created_at: row.created_at,
+                  edited_at: row.edited_at ?? null,
+                  pending: false,
+                  failed: false,
+                },
+              ];
+            });
+            if (row.sender_id !== userId) {
+              haptic("light");
+              void markPartnerAsRead();
             }
-          }
-          setMessages((prev) => {
-            const idx = row.client_id ? prev.findIndex((m) => m.client_id === row.client_id) : -1;
-            if (idx >= 0) {
-              const next = [...prev];
-              next[idx] = row;
-              return next;
-            }
-            if (prev.some((m) => m.id === row.id)) return prev;
-            return [...prev, row];
-          });
-          if (row.sender_id !== userId) {
-            haptic("light");
-            void markAsRead();
+          } else if (payload.eventType === "UPDATE") {
+            const row: any = payload.new;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === row.id ? { ...m, ...row } : m)),
+            );
           }
         },
       )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "messages" },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (payload: any) => {
-          const updated = payload.new as ChatMessage;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === updated.id
-                ? {
-                    ...m,
-                    body: updated.body ?? m.body,
-                    reactions: updated.reactions ?? null,
-                    read_at: updated.read_at ?? null,
-                    edited_at: updated.edited_at ?? null,
-                  }
-                : m,
-            ),
-          );
-        },
-      )
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .on("broadcast", { event: "typing" }, (payload: any) => {
-        if (payload?.payload?.senderId !== userId) {
-          setPartnerTyping(true);
-          if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-          typingTimerRef.current = setTimeout(() => setPartnerTyping(false), 2500);
+        if (payload.payload?.email !== email) {
+          setTyping(payload.payload?.name || "Partner");
+          if (typingTimeout.current) window.clearTimeout(typingTimeout.current);
+          typingTimeout.current = window.setTimeout(() => setTyping(null), 2500);
         }
       })
-      .subscribe();
-
-    return () => {
-      active = false;
-      void supabase.removeChannel(channel);
-    };
-  }, [markAsRead, userId]);
-
-  useEffect(() => {
-    const callChan = supabase.channel("care-desk-call-signaling", {
-      config: { broadcast: { self: false } },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    callChan
-      .on("broadcast", { event: "call-offer" }, ({ payload }: any) => {
-        if (payload?.callerId && payload?.sdp) {
-          haptic("medium");
+      .on("broadcast", { event: "call-signal" }, (payload: any) => {
+        const data = payload.payload;
+        if (!data || data.to !== email) return;
+        if (data.type === "offer") {
           setIncomingCall({
-            callerId: payload.callerId,
-            callerName: payload.callerName,
-            sdp: payload.sdp,
-            isVideo: Boolean(payload.isVideo),
+            caller: data.from === "tim@popotso.app" ? "Father" : "Mother",
+            isVideo: Boolean(data.isVideo),
+            sdp: data.sdp,
           });
-          setCallWithVideo(Boolean(payload.isVideo));
-          setInCall(true);
+          setCallWithVideo(Boolean(data.isVideo));
+          haptic("heavy");
         }
       })
       .subscribe();
 
-    callChannelRef.current = callChan;
+    channelRef.current = channel;
+
     return () => {
-      void supabase.removeChannel(callChan);
+      if (typingTimeout.current) window.clearTimeout(typingTimeout.current);
+      channel.unsubscribe();
     };
-  }, [email]);
+  }, [email, markPartnerAsRead, userId]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, partnerTyping]);
-
-  const patch = useCallback((clientId: string, delta: Partial<ChatMessage>) => {
-    setMessages((prev) => prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...delta } : m)));
+  const patch = useCallback((clientId: string, updates: Partial<ChatMessage>) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.client_id === clientId || m.id === clientId ? { ...m, ...updates } : m)),
+    );
   }, []);
 
-  const insert = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (row: any, originalBlob?: Blob) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase as any)
-        .from("messages")
-        .insert({
-          ...row,
-          sender_id: userId,
-          sender_email: email,
-        })
-        .select()
-        .single();
-      if (error) {
-        console.error("Message send failed:", error);
-        if (row.client_id) {
-          patch(row.client_id, { failed: true, pending: false });
-          putOutbox({
-            id: row.client_id,
-            client_id: row.client_id,
-            sender_id: userId,
-            sender_email: email,
-            created_at: new Date().toISOString(),
-            failed: true,
-            pending: false,
-            ...row,
-          });
-          if (originalBlob) {
-            void saveBlob(row.client_id, originalBlob);
-          }
-        }
-        return;
-      }
-      if (row.client_id) {
-        patch(row.client_id, { id: data.id, pending: false, failed: false });
-        removeOutbox(row.client_id);
-      }
-      void notifyPartner({
-        data: {
-          preview: previewFor(row.kind, row.body),
-        },
-      }).catch(() => {});
-    },
-    [email, patch, userId],
-  );
-      const optimistic = useCallback(
+  const handleCancelUpload = useCallback((clientId: string) => {
+    haptic("light");
+    const controller = uploadControllers.current.get(clientId);
+    if (controller) {
+      controller.abort();
+      uploadControllers.current.delete(clientId);
+    }
+    setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+    void deleteBlob(clientId);
+    void deleteOutbox(clientId);
+  }, []);
+
+  const optimistic = useCallback(
     (partial: Partial<ChatMessage>, clientId: string): ChatMessage => ({
       id: clientId,
+      client_id: clientId,
       sender_id: userId,
       sender_email: email,
       body: null,
@@ -323,7 +289,7 @@ function ChatRoom({ session }: { session: Session }) {
       attachment_type: null,
       attachment_size: null,
       duration_ms: null,
-      client_id: clientId,
+      reactions: {},
       created_at: new Date().toISOString(),
       pending: true,
       progress: 0,
@@ -333,23 +299,66 @@ function ChatRoom({ session }: { session: Session }) {
     [email, userId],
   );
 
-  const sendText = (body: string) => {
-    const clientId = crypto.randomUUID();
-    setMessages((prev) => [...prev, optimistic({ body, kind: "text" }, clientId)]);
-    void insert({ client_id: clientId, kind: "text", body });
-  };
+  const insert = useCallback(
+    async (row: any, blobToCache?: Blob) => {
+      const clientId = row.client_id;
+      if (blobToCache && clientId) {
+        await putBlob(clientId, blobToCache);
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
+        .from("messages")
+        .insert({
+          sender_id: userId,
+          sender_email: email,
+          ...row,
+        })
+        .select()
+        .single();
 
-  const sendBlob = useCallback(
-    async (blob: Blob, name: string, kind: MessageKind, durationMs?: number, existingClientId?: string) => {
-      const clientId = existingClientId || crypto.randomUUID();
+      if (error) {
+        console.error("Database insert failed", error);
+        patch(clientId, { failed: true, pending: false });
+        await putOutbox({
+          id: clientId,
+          client_id: clientId,
+          sender_id: userId,
+          sender_email: email,
+          ...row,
+          created_at: new Date().toISOString(),
+          failed: true,
+          pending: false,
+        });
+        return;
+      }
+
+      patch(clientId, { ...data, pending: false, failed: false });
+      await deleteOutbox(clientId);
+      if (clientId) await deleteBlob(clientId);
+
+      void notifyPartner({
+        data: {
+          preview: previewFor(row.kind, row.body),
+          title: isNicky ? "Mother" : "Father",
+          type: "message",
+        },
+      }).catch(() => {});
+    },
+    [email, isNicky, patch, userId],
+  );
+          const sendBlob = useCallback(
+    async (
+      blob: Blob,
+      kind: "image" | "video" | "audio" | "document",
+      name: string,
+      durationMs?: number,
+    ) => {
+      const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const ext = name.split(".").pop() || "bin";
+      const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
       const localUrl = URL.createObjectURL(blob);
-      const safeName = name.replace(/[^\w.\-]+/g, "_");
-      const path = `${userId}/${clientId}-${safeName}`;
-
-      void saveBlob(clientId, blob);
 
       setMessages((prev) => {
-        const existing = prev.findIndex((m) => m.client_id === clientId || m.id === clientId);
         const item = optimistic(
           {
             kind,
@@ -365,18 +374,23 @@ function ChatRoom({ session }: { session: Session }) {
           },
           clientId,
         );
-        if (existing >= 0) {
-          const next = [...prev];
-          next[existing] = item;
-          return next;
-        }
         return [...prev, item];
       });
 
+      const controller = new AbortController();
+      uploadControllers.current.set(clientId, controller);
+
       try {
-        await uploadRaw(path, blob, blob.type, (fraction) => {
-          patch(clientId, { progress: fraction });
-        });
+        await uploadRaw(
+          path,
+          blob,
+          blob.type,
+          (fraction) => {
+            patch(clientId, { progress: fraction });
+          },
+          controller.signal,
+        );
+        uploadControllers.current.delete(clientId);
         const url = await signedUrlFor(path);
         patch(clientId, { attachment_url: url, progress: 1 });
         await insert(
@@ -392,7 +406,14 @@ function ChatRoom({ session }: { session: Session }) {
           },
           blob,
         );
-      } catch (e) {
+      } catch (e: any) {
+        uploadControllers.current.delete(clientId);
+        if (e?.name === "AbortError") {
+          setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+          void deleteBlob(clientId);
+          void deleteOutbox(clientId);
+          return;
+        }
         console.error("Upload failed", e);
         patch(clientId, { failed: true, pending: false });
         putOutbox({
@@ -419,21 +440,24 @@ function ChatRoom({ session }: { session: Session }) {
 
   const sendFiles = (files: FileList | File[]) => {
     Array.from(files).forEach((file) => {
-      const kind = kindForFile(file, file.name);
-      void sendBlob(file, file.name, kind);
+      const type = file.type;
+      let kind: "image" | "video" | "audio" | "document" = "document";
+      if (type.startsWith("image/")) kind = "image";
+      else if (type.startsWith("video/")) kind = "video";
+      else if (type.startsWith("audio/")) kind = "audio";
+      void sendBlob(file, kind, file.name);
     });
   };
 
-  const sendVoice = (blob: Blob, durationMs: number) => {
-    const mime = blob.type || pickAudioMime();
-    const ext = audioExtension(mime);
-    void sendBlob(blob, `voice-${Date.now()}.${ext}`, "audio", durationMs);
+  const handleSendText = async (text: string) => {
+    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setMessages((prev) => [...prev, optimistic({ body: text, kind: "text", pending: true }, clientId)]);
+    await insert({ client_id: clientId, kind: "text", body: text });
   };
 
   const handleRetry = useCallback(
     async (msg: ChatMessage) => {
       const clientId = msg.client_id || msg.id;
-      haptic("light");
       if (msg.kind === "text" && msg.body) {
         patch(clientId, { pending: true, failed: false });
         await insert({ client_id: clientId, kind: "text", body: msg.body });
@@ -441,9 +465,9 @@ function ChatRoom({ session }: { session: Session }) {
         patch(clientId, { pending: true, failed: false, progress: 0 });
         const blob = await getBlob(clientId);
         if (blob && msg.attachment_name) {
-          await sendBlob(blob, msg.attachment_name, msg.kind, msg.duration_ms ?? undefined, clientId);
+          await sendBlob(blob, msg.kind, msg.attachment_name, msg.duration_ms ?? undefined);
         } else {
-          patch(clientId, { failed: true, pending: false });
+          alert("Media file is no longer available in cache to retry. Please select and send it again.");
         }
       }
     },
@@ -451,41 +475,45 @@ function ChatRoom({ session }: { session: Session }) {
   );
 
   const handleEdit = useCallback((msg: ChatMessage) => {
-    if (msg.kind === "text" && msg.body) {
-      setEditing({ id: msg.id, text: msg.body });
-    }
+    setEditingMessage(msg);
   }, []);
 
-  const handleSaveEdit = useCallback(async (id: string, newText: string) => {
-    setEditing(null);
-    const now = new Date().toISOString();
-    setMessages((prev) =>
-      prev.map((m) => (m.id === id || m.client_id === id ? { ...m, body: newText, edited_at: now } : m)),
-    );
-    try {
+  const handleSaveEdit = useCallback(
+    async (id: string, newText: string) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === id || m.client_id === id
+            ? { ...m, body: newText, edited_at: new Date().toISOString() }
+            : m,
+        ),
+      );
+      setEditingMessage(null);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (supabase as any)
         .from("messages")
-        .update({ body: newText, edited_at: now })
+        .update({ body: newText, edited_at: new Date().toISOString() })
         .eq("id", id);
-    } catch (e) {
-      console.warn("Could not save edit to server", e);
-    }
-  }, []);
+      haptic("light");
+    },
+    [],
+  );
 
   const handleCancelEdit = useCallback(() => {
-    setEditing(null);
+    setEditingMessage(null);
   }, []);
 
-  const react = async (messageId: string, emoji: string | null) => {
-    const target = messages.find((m) => m.id === messageId);
-    if (!target) return;
-    const current = { ...(target.reactions ?? {}) };
-    if (!emoji || current[userId] === emoji) {
-      delete current[userId];
-    } else {
-      current[userId] = emoji;
-    }
+  const handleReaction = async (messageId: string, emoji: string) => {
+    const msg = messages.find((m) => m.id === messageId || m.client_id === messageId);
+    if (!msg) return;
+
+    const current = { ...(msg.reactions ?? {}) };
+    const senders = new Set(current[emoji] ?? []);
+
+    if (senders.has(userId)) senders.delete(userId);
+    else senders.add(userId);
+
+    if (senders.size === 0) delete current[emoji];
+    else current[emoji] = Array.from(senders);
 
     setMessages((prev) =>
       prev.map((m) => (m.id === messageId ? { ...m, reactions: current } : m)),
@@ -500,7 +528,7 @@ function ChatRoom({ session }: { session: Session }) {
       setPushActive(true);
       haptic("success");
     } else if (res !== "denied") {
-      alert(`Notification status: ${res}`);
+      // Alert handled directly in push.ts with exact reason
     }
   };
 
@@ -509,7 +537,6 @@ function ChatRoom({ session }: { session: Session }) {
     setIncomingCall(null);
     setCallWithVideo(withVideo);
     setInCall(true);
-    // Fire push notification so partner's phone rings even if screen is locked
     void notifyPartner({
       data: {
         title: "Popotso Incoming Call",
@@ -533,28 +560,28 @@ function ChatRoom({ session }: { session: Session }) {
   const lastOutgoingIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (!m) continue;
-      const isMine =
-        m.sender_id === userId ||
-        m.sender_email === email ||
-        (isNicky &&
-          (m.sender_email === "nicky@popotso.app" || m.sender_email === "mother@popotso.app"));
-      if (isMine && !m.pending && !m.failed) return i;
+      if (m.sender_id === userId || m.sender_email === email) return i;
     }
     return -1;
-  }, [email, isNicky, messages, userId]);
+  }, [messages, userId, email]);
 
-  const lastOutgoingMessage = lastOutgoingIndex >= 0 ? messages[lastOutgoingIndex] : null;
+  const partnerHasRead = useMemo(() => {
+    return messages.some(
+      (m) =>
+        m.sender_id !== userId &&
+        (m.sender_email === "nicky@popotso.app" || m.sender_email === "mother@popotso.app"),
+    );
+  }, [messages, userId]);
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background text-foreground">
-      {/* iOS 18 Header Bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/60 bg-background/80 px-4 backdrop-blur-md">
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      {/* Top Header Bar */}
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setShowAttribution(true)}
-            className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95"
+            className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary"
             aria-label="App info"
           >
             <Info className="size-4" />
@@ -566,7 +593,7 @@ function ChatRoom({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Low-Data Audio Call Button */}
+          {/* Low-Data Audio Call */}
           <button
             type="button"
             onClick={() => startCall(false)}
@@ -577,7 +604,7 @@ function ChatRoom({ session }: { session: Session }) {
             <Phone className="size-4 text-primary" />
           </button>
 
-          {/* HD Balanced Video Call Button */}
+          {/* HD Balanced Video Call */}
           <button
             type="button"
             onClick={() => startCall(true)}
@@ -619,86 +646,75 @@ function ChatRoom({ session }: { session: Session }) {
                 {group.label}
               </span>
             </div>
+            {group.items.map((msg) => {
+              const globalIndex = messages.findIndex((m) => m.id === msg.id);
+              const isLastOutgoing = globalIndex === lastOutgoingIndex;
+              const outgoing = msg.sender_id === userId || msg.sender_email === email;
 
-            <div className="flex flex-col gap-2">
-              {group.items.map((msg) => {
-                const isMine =
-                  msg.sender_id === userId ||
-                  msg.sender_email === email ||
-                  (isNicky &&
-                    (msg.sender_email === "nicky@popotso.app" ||
-                      msg.sender_email === "mother@popotso.app"));
-                const isLatest = lastOutgoingMessage?.id === msg.id;
-                let receipt: string | null = null;
-                if (isMine && isLatest) {
-                  receipt = msg.read_at ? `Read ${formatClock(msg.read_at)}` : "Delivered";
-                }
-
-                return (
-                  <MessageBubble
-                    key={msg.id || msg.client_id}
-                    message={msg}
-                    isMine={isMine}
-                    outgoing={isMine}
-                    myId={userId}
-                    receipt={receipt}
-                    onOpenLightbox={(item) => setLightboxItem(item)}
-                    onOpen={(item) => setLightboxItem(item)}
-                    onReact={(message, emoji) => void react(message.id, emoji)}
-                    onRetry={handleRetry}
-                    onEdit={handleEdit}
-                  />
-                );
-              })}
-            </div>
+              return (
+                <MessageBubble
+                  key={msg.client_id || msg.id}
+                  message={msg}
+                  outgoing={outgoing}
+                  partnerName={partnerName}
+                  isRead={isLastOutgoing && partnerHasRead}
+                  onSelectMedia={(url, kind) => setLightbox({ url, kind })}
+                  onReact={(emoji) => handleReaction(msg.id, emoji)}
+                  onRetry={() => handleRetry(msg)}
+                  onEdit={handleEdit}
+                  onCancelUpload={handleCancelUpload}
+                />
+              );
+            })}
           </div>
         ))}
 
-        {partnerTyping && (
-          <div className="flex items-center gap-1.5 px-2 py-1 text-muted-foreground">
-            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground" />
-            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0.2s]" />
-            <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0.4s]" />
+        {typing && (
+          <div className="mb-2 text-xs italic text-muted-foreground">
+            {typing} is typing...
           </div>
         )}
 
-        <div ref={bottomRef} />
+        <div ref={scrollRef} />
       </main>
 
-      {/* Message Composer */}
-      <footer className="sticky bottom-0 border-t border-border/60 bg-background/80 p-2 backdrop-blur-md">
-        <Composer
-          onSendText={sendText}
-          onSendFiles={sendFiles}
-          onSendVoice={sendVoice}
-          editing={editing}
-          onSaveEdit={handleSaveEdit}
-          onCancelEdit={handleCancelEdit}
-          onTyping={() => {
-            const chan = supabase.channel("care-desk-realtime");
-            void chan.send({
-              type: "broadcast",
-              event: "typing",
-              payload: { senderId: userId },
-            });
-          }}
-        />
-      </footer>
+      {/* Composer Input Area */}
+      <Composer
+        onSendText={handleSendText}
+        onSendFiles={sendFiles}
+        onSendVoiceNote={(blob, duration) =>
+          sendBlob(blob, "audio", `voicenote.${audioExtension(pickAudioMime())}`, duration)
+        }
+        onTyping={() => {
+          void channelRef.current?.send({
+            type: "broadcast",
+            event: "typing",
+            payload: { email, name: isNicky ? "Mother" : "Father" },
+          });
+        }}
+        editingMessage={editingMessage}
+        onSaveEdit={handleSaveEdit}
+        onCancelEdit={handleCancelEdit}
+      />
 
-      {/* Lightbox */}
-      {lightboxItem && (
-        <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
+      {/* Fullscreen Media Lightbox */}
+      {lightbox && (
+        <Lightbox
+          url={lightbox.url}
+          kind={lightbox.kind}
+          onClose={() => setLightbox(null)}
+        />
       )}
 
       {/* Low-Data Voice & Video Call Modal */}
-      {inCall && callChannelRef.current && (
+      {(inCall || incomingCall) && (
         <VoiceCallModal
-          myId={userId}
-          myEmail={email}
+          session={session}
           partnerEmail={partnerEmail}
-          channel={callChannelRef.current}
+          partnerName={partnerName}
+          incomingOffer={incomingCall?.sdp}
+          incomingCaller={incomingCall?.caller}
           initialVideo={callWithVideo}
-          incomingCall={incomingCall}
           onClose={() => {
             setInCall(false);
             setIncomingCall(null);
@@ -706,16 +722,27 @@ function ChatRoom({ session }: { session: Session }) {
         />
       )}
 
-      {/* Attribution Drawer */}
+      {/* System Attribution Modal */}
       {showAttribution && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-          <div className="max-w-md rounded-3xl bg-card p-6 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-[17px] font-semibold">About Popotso Care Desk</h2>
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setShowAttribution(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-border/80 bg-popover p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+                System Attribution
+              </h2>
               <button
                 type="button"
                 onClick={() => setShowAttribution(false)}
-                className="flex size-7 items-center justify-center rounded-full bg-secondary text-muted-foreground"
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary"
+                aria-label="Close"
               >
                 <X className="size-4" />
               </button>
@@ -728,5 +755,4 @@ function ChatRoom({ session }: { session: Session }) {
       )}
     </div>
   );
-          }
-                     
+                   }
