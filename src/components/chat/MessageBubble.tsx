@@ -17,7 +17,7 @@ interface MessageBubbleProps {
   onSelectMedia?: (url: string, kind: "image" | "video") => void;
   onReact?: (emoji: string) => void;
   onRetry?: () => void;
-  onEdit?: (message: ChatMessage) => void;
+  onEdit?: (message: ChatMessage) => void;\n  onReply?: () => void;\n  replyPreview?: { sender: string; text: string } | null;
   onCancelUpload?: (clientId: string) => void;
   partnerName?: string;
   isRead?: boolean;
@@ -39,7 +39,7 @@ export function MessageBubble({
   const [trayOpen, setTrayOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const longPressTimer = useRef<number | null>(null);
-  const longPressed = useRef(false);
+  const longPressed = useRef(false);\n  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef(0);
   const url = message.localUrl ?? message.attachment_url ?? "";
   const uploading = Boolean(message.pending && message.attachment_path);
