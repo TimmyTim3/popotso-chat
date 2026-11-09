@@ -19,7 +19,7 @@ interface MessageBubbleProps {
   onRetry?: () => void;
   onEdit?: (message: ChatMessage) => void;
   onReply?: () => void;
-  replyPreview?: { sender: string; text: string } | null;
+  replyPreview?: { sender: string; text: string; messageId?: string } | null;
   isPinned?: boolean;
   isFavorite?: boolean;
   onPin?: () => void;
@@ -354,10 +354,10 @@ export function MessageBubble({
         )}
 
         {replyPreview && (
-          <div className="mb-2 rounded-xl border-l-[3px] border-primary bg-black/5 px-2.5 py-1.5 text-xs dark:bg-white/10">
+          <button type="button" onClick={() => replyPreview.messageId && document.getElementById(`message-${replyPreview.messageId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} className="mb-2 block w-full rounded-xl border-l-[3px] border-primary bg-black/5 px-2.5 py-1.5 text-left text-xs dark:bg-white/10">
             <p className="font-semibold text-primary">{replyPreview.sender}</p>
             <p className="line-clamp-2 opacity-80">{replyPreview.text}</p>
-          </div>
+          </button>
         )}
 
         {/* Text Message */}
