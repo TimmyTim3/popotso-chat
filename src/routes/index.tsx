@@ -720,7 +720,7 @@ function ChatRoom({ session }: { session: Session }) {
                   onFavorite={() => void handleFavorite(msg)}
                   replyPreview={msg.reply_to_id ? (() => {
                     const original = messages.find((item) => item.id === msg.reply_to_id || item.client_id === msg.reply_to_id);
-                    return original ? { sender: original.sender_id === userId ? "You" : partnerName, text: previewFor(original.kind, original.body) } : { sender: "Original message", text: "Message unavailable" };
+                    return original ? { sender: original.sender_id === userId ? "You" : partnerName, text: previewFor(original.kind, original.body), messageId: original.id } : { sender: "Original message", text: "Message unavailable" };
                   })() : null}
                   onRetry={() => handleRetry(msg)}
                   onEdit={handleEdit}
