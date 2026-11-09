@@ -290,6 +290,9 @@ function ChatRoom({ session }: { session: Session }) {
           preview: previewFor(row.kind ?? "text", row.body ?? null),
           title: isNicky ? "Mother" : "Father",
         },
+      }).catch((error) => {
+        // Push delivery must never turn a successfully-sent chat message into a failed message.
+        console.error("Partner notification request failed:", error);
       });
     } catch {
       patch(clientId, { failed: true, pending: false });
