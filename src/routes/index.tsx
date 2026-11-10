@@ -12,6 +12,7 @@ import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
 import { supabase } from "@/integrations/supabase/client";
 import {
   audioExtension,
+  BUCKET,
   formatDayLabel,
   pickAudioMime,
   previewFor,
@@ -119,6 +120,7 @@ function ChatRoom({ session }: { session: Session }) {
   const typingTimeout = useRef<number | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const uploadControllers = useRef<Map<string, AbortController>>(new Map());
+  const retryingMessages = useRef<Set<string>>(new Set());
 
   const userId = session.user.id;
   const email = (session.user.email ?? "") as MemberEmail;
@@ -319,14 +321,37 @@ function ChatRoom({ session }: { session: Session }) {
     };
 
     try {
+      // Reconcile by stable client_id before inserting. A timeout can happen after
+      // the server committed, so retrying must never create a second chat row.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase as any)
+      const db = supabase as any;
+      const { data: existing, error: lookupError } = await db
         .from("messages")
-        .insert(payload)
-        .select()
-        .single();
+        .select("*")
+        .eq("client_id", clientId)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
 
-      if (error) throw error;
+      let data = existing;
+      if (!data) {
+        const { data: inserted, error } = await db
+          .from("messages")
+          .insert(payload)
+          .select()
+          .single();
+        if (error) {
+          // A concurrent retry may have inserted the same client_id.
+          const { data: reconciled } = await db
+            .from("messages")
+            .select("*")
+            .eq("client_id", clientId)
+            .maybeSingle();
+          if (!reconciled) throw error;
+          data = reconciled;
+        } else {
+          data = inserted;
+        }
+      }
 
       deleteOutbox(clientId);
       playSound("send");
@@ -375,89 +400,73 @@ function ChatRoom({ session }: { session: Session }) {
     kind: "image" | "video" | "audio" | "document",
     name: string,
     durationMs?: number,
+    existingMessage?: ChatMessage,
   ) => {
-    const clientId = crypto.randomUUID();
+    // Retries retain the original client_id AND storage path. Never create a
+    // second optimistic message or a second attachment identity.
+    const clientId = existingMessage?.client_id || existingMessage?.id || crypto.randomUUID();
     const ext = name.includes(".") ? name.split(".").pop() : "";
-    const path = `${userId}/${Date.now()}-${crypto.randomUUID()}${ext ? `.${ext}` : ""}`;
+    const path = existingMessage?.attachment_path ||
+      `${userId}/${Date.now()}-${crypto.randomUUID()}${ext ? `.${ext}` : ""}`;
     const localUrl = URL.createObjectURL(blob);
 
     void putBlob(clientId, blob);
 
-    const optimistic: ChatMessage = {
-      id: clientId,
-      client_id: clientId,
-      sender_id: userId,
-      sender_email: email,
-      body: null,
-      kind,
-      attachment_path: path,
-      attachment_name: name,
-      attachment_type: blob.type,
-      attachment_size: blob.size,
-      duration_ms: durationMs ?? null,
-      localUrl,
-      created_at: new Date().toISOString(),
-      pending: true,
-      failed: false,
-      progress: 0,
-    };
-
-    putOutbox(optimistic);
-    setMessages((prev) => [...prev, optimistic]);
+    if (existingMessage) {
+      patch(clientId, {
+        pending: true, failed: false, progress: 0, localUrl,
+        attachment_path: path, attachment_name: name,
+        attachment_type: blob.type, attachment_size: blob.size,
+      });
+    } else {
+      const optimistic: ChatMessage = {
+        id: clientId, client_id: clientId, sender_id: userId, sender_email: email,
+        body: null, kind, attachment_path: path, attachment_name: name,
+        attachment_type: blob.type, attachment_size: blob.size,
+        duration_ms: durationMs ?? null, localUrl,
+        created_at: new Date().toISOString(), pending: true, failed: false, progress: 0,
+      };
+      putOutbox(optimistic);
+      setMessages((prev) => prev.some((m) => (m.client_id || m.id) === clientId) ? prev : [...prev, optimistic]);
+    }
 
     const controller = new AbortController();
     uploadControllers.current.set(clientId, controller);
 
     try {
       await uploadRaw(
-        path,
-        blob,
-        blob.type,
-        (fraction) => {
-          patch(clientId, { progress: fraction });
-        },
+        path, blob, blob.type,
+        (fraction) => patch(clientId, { progress: fraction }),
         controller.signal,
       );
-      uploadControllers.current.delete(clientId);
       const url = await signedUrlFor(path);
       patch(clientId, { attachment_url: url, progress: 1 });
       await insert({
-        client_id: clientId,
-        kind,
-        attachment_path: path,
-        attachment_url: url,
-        attachment_name: name,
-        attachment_type: blob.type,
-        attachment_size: blob.size,
-        duration_ms: durationMs ?? null,
+        client_id: clientId, kind, attachment_path: path, attachment_url: url,
+        attachment_name: name, attachment_type: blob.type,
+        attachment_size: blob.size, duration_ms: durationMs ?? null,
       });
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
-        deleteOutbox(clientId);
-        void deleteBlob(clientId);
+        if (!existingMessage) {
+          setMessages((prev) => prev.filter((m) => (m.client_id || m.id) !== clientId));
+          deleteOutbox(clientId);
+          void deleteBlob(clientId);
+        }
         return;
       }
       patch(clientId, { failed: true, pending: false });
       putOutbox({
-        id: clientId,
-        client_id: clientId,
-        sender_id: userId,
-        sender_email: email,
-        body: null,
-        kind,
-        attachment_path: path,
-        attachment_name: name,
-        attachment_type: blob.type,
-        attachment_size: blob.size,
-        duration_ms: durationMs ?? null,
-        created_at: new Date().toISOString(),
-        pending: false,
-        failed: true,
+        id: clientId, client_id: clientId, sender_id: userId, sender_email: email,
+        body: null, kind, attachment_path: path, attachment_name: name,
+        attachment_type: blob.type, attachment_size: blob.size,
+        duration_ms: durationMs ?? null, created_at: existingMessage?.created_at ?? new Date().toISOString(),
+        pending: false, failed: true,
       });
       haptic("warning");
     } finally {
       uploadControllers.current.delete(clientId);
+      URL.revokeObjectURL(localUrl);
     }
   };
 
@@ -497,19 +506,36 @@ function ChatRoom({ session }: { session: Session }) {
 
   const handleRetry = async (msg: ChatMessage) => {
     const cid = msg.client_id || msg.id;
+    if (retryingMessages.current.has(cid)) return;
+    retryingMessages.current.add(cid);
     patch(cid, { failed: false, pending: true, progress: 0 });
-
-    if (msg.kind === "text") {
-      await insert({ client_id: cid, body: msg.body, kind: "text" });
-      return;
+    try {
+      if (msg.kind === "text") {
+        await insert({ client_id: cid, body: msg.body, kind: "text", reply_to_id: msg.reply_to_id });
+        return;
+      }
+      const cachedBlob = await getBlob(cid);
+      if (cachedBlob && msg.attachment_name) {
+        await uploadAndSend(cachedBlob, msg.kind, msg.attachment_name, msg.duration_ms ?? undefined, msg);
+      } else {
+        patch(cid, { failed: true, pending: false });
+      }
+    } finally {
+      retryingMessages.current.delete(cid);
     }
+  };
 
-    const cachedBlob = await getBlob(cid);
-    if (cachedBlob && msg.attachment_name) {
-      await uploadAndSend(cachedBlob, msg.kind, msg.attachment_name, msg.duration_ms ?? undefined);
-    } else {
-      patch(cid, { failed: true, pending: false });
+  const handleDeleteFailed = async (msg: ChatMessage) => {
+    const cid = msg.client_id || msg.id;
+    uploadControllers.current.get(cid)?.abort();
+    uploadControllers.current.delete(cid);
+    setMessages((prev) => prev.filter((item) => (item.client_id || item.id) !== cid));
+    deleteOutbox(cid);
+    await deleteBlob(cid);
+    if (msg.attachment_path) {
+      try { await supabase.storage.from(BUCKET).remove([msg.attachment_path]); } catch { /* best effort cleanup */ }
     }
+    haptic("light");
   };
 
   const handleEdit = useCallback((message: ChatMessage) => {
@@ -785,6 +811,7 @@ function ChatRoom({ session }: { session: Session }) {
                     return original ? { sender: original.sender_id === userId ? "You" : partnerName, text: previewFor(original.kind, original.body), messageId: original.id } : { sender: "Original message", text: "Message unavailable" };
                   })() : null}
                   onRetry={() => handleRetry(msg)}
+                  onDeleteFailed={() => void handleDeleteFailed(msg)}
                   onEdit={handleEdit}
                   onCancelUpload={handleCancelUpload}
                 />
