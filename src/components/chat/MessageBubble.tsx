@@ -128,12 +128,28 @@ export function MessageBubble({
 
   // Double-tap sends a quick Heart reaction
   const handleTouchStart = (e: React.TouchEvent) => {
-    touchStart.current = { x: e.changedTouches[0]?.clientX ?? 0, y: e.changedTouches[0]?.clientY ?? 0 };
+    const touch = e.touches[0];
+    touchStart.current = { x: touch?.clientX ?? 0, y: touch?.clientY ?? 0 };
     longPressed.current = false;
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
     longPressTimer.current = window.setTimeout(() => {
       longPressed.current = true;
       openMenu();
-    }, 450);
+      longPressTimer.current = null;
+    }, 2500);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const start = touchStart.current;
+    const touch = e.touches[0];
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    // Moving means the user is scrolling, not requesting message actions.
+    if (Math.hypot(dx, dy) > 10 && longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
@@ -161,21 +177,13 @@ export function MessageBubble({
       return;
     }
 
-    const now = Date.now();
-    const DOUBLE_TAP_DELAY = 300;
-    if (now - lastTap.current < DOUBLE_TAP_DELAY && canReact) {
-      e.stopPropagation();
-      handleReaction("❤️");
-      lastTap.current = 0;
-      return;
-    }
-    lastTap.current = now;
+    lastTap.current = Date.now();
     setShowTime((prev) => !prev);
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    // Do not bypass the deliberate 2.5-second press gesture with the browser menu.
     e.preventDefault();
-    openMenu();
   };
 
   const receipt = outgoing ? (
@@ -324,10 +332,11 @@ export function MessageBubble({
       <div
         onClick={handleBubbleClick}
         onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
         onContextMenu={handleContextMenu}
-        className={`relative max-w-[82%] select-text overflow-visible rounded-[20px] transition active:scale-[0.99] ${
+        className={`relative max-w-[82%] select-none overflow-visible rounded-[20px] transition active:scale-[0.99] ${
           groupedReactions.length > 0 ? "mt-2.5" : ""
         } ${
           mediaOnly
