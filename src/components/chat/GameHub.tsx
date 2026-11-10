@@ -104,10 +104,11 @@ const draughtsMovesForPiece = (board:string[],from:number):DraughtsMove[] => {
   return [...captures,...steps];
 };
 const getDraughtsLegalMoves = (board:string[],side:string,forcedPiece:number|null=null):DraughtsMove[] => {
+  // Draughts here allows a player to choose any of their pieces.
+  // A capture by one piece must not globally block ordinary moves by another.
+  // Only a multi-capture sequence forces the same piece to continue jumping.
   const pieces=forcedPiece!==null?[forcedPiece]:board.map((piece,index)=>piece&&draughtsSide(piece)===side?index:-1).filter(index=>index>=0);
-  const moves=pieces.flatMap(index=>draughtsMovesForPiece(board,index)).filter(move=>board[move.from]&&draughtsSide(board[move.from])===side);
-  const captures=moves.filter(move=>move.capture!==null);
-  return captures.length?captures:moves;
+  return pieces.flatMap(index=>draughtsMovesForPiece(board,index)).filter(move=>board[move.from]&&draughtsSide(board[move.from])===side);
 };
 const applyDraughtsMove = (board:string[],move:DraughtsMove) => {
   const next=[...board],piece=next[move.from];
