@@ -21,6 +21,7 @@ import {
   type MemberEmail,
 } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
+import { playSound, unlockSounds } from "@/lib/sounds";
 import { deleteBlob, deleteOutbox, getBlob, loadOutbox, putBlob, putOutbox } from "@/lib/outbox";
 import { notifyPartner } from "@/lib/push.functions";
 import { currentPushEnabled, enablePush } from "@/lib/push";
@@ -119,7 +120,7 @@ function ChatRoom({ session }: { session: Session }) {
   const email = (session.user.email ?? "") as MemberEmail;
   const isNicky = email === "nicky@popotso.app" || email === "mother@popotso.app";
   const partnerEmail: MemberEmail = isNicky ? "tim@popotso.app" : "nicky@popotso.app";
-  const partnerName = isNicky ? "Tim" : "Mother";
+  const partnerName = isNicky ? "Tim" : "Nicky";
 
   const markPartnerAsRead = useCallback(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -166,6 +167,12 @@ function ChatRoom({ session }: { session: Session }) {
     setMessages([...hydrated, ...pendingOutbox]);
     void markPartnerAsRead();
   }, [userId, markPartnerAsRead]);
+
+  useEffect(() => {
+    const unlock = () => unlockSounds();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    return () => window.removeEventListener("pointerdown", unlock);
+  }, []);
 
   useEffect(() => {
     void refreshMessages();
@@ -226,6 +233,7 @@ function ChatRoom({ session }: { session: Session }) {
             void markPartnerAsRead();
             if (!nearBottomRef.current) setNewMessageCount((count) => count + 1);
             haptic("light");
+            playSound("receive");
           }
         },
       )
@@ -310,6 +318,7 @@ function ChatRoom({ session }: { session: Session }) {
       if (error) throw error;
 
       deleteOutbox(clientId);
+      playSound("send");
       void deleteBlob(clientId);
 
       setMessages((prev) =>
@@ -327,6 +336,7 @@ function ChatRoom({ session }: { session: Session }) {
       });
     } catch {
       patch(clientId, { failed: true, pending: false });
+      playSound("wrong");
       putOutbox({
         id: clientId,
         client_id: clientId,
