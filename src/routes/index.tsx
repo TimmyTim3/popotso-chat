@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X } from "lucide-react";
+import { ArrowDown, Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X } from "lucide-react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
@@ -86,7 +86,9 @@ function ChatIndex() {
 function ChatRoom({ session }: { session: Session }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [typing, setTyping] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<{ url: string; kind: "image" | "video" } | null>(null);
+  const [lightbox, setLightbox] = useState<{ items: { url: string; kind: "image" | "video"; name?: string | null }[]; index: number } | null>(null);
+  const [farFromLatest, setFarFromLatest] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const [showAttribution, setShowAttribution] = useState(false);
   const [pushActive, setPushActive] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
@@ -107,6 +109,8 @@ function ChatRoom({ session }: { session: Session }) {
   } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLElement>(null);
+  const nearBottomRef = useRef(true);
   const typingTimeout = useRef<number | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const uploadControllers = useRef<Map<string, AbortController>>(new Map());
@@ -169,8 +173,25 @@ function ChatRoom({ session }: { session: Session }) {
   }, [refreshMessages]);
 
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (nearBottomRef.current) scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, typing]);
+
+  const handleChatScroll = () => {
+    const element = chatScrollRef.current;
+    if (!element) return;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    nearBottomRef.current = distance < 120;
+    setFarFromLatest(element.scrollTop > element.clientHeight * 3);
+    if (nearBottomRef.current) setNewMessageCount(0);
+  };
+
+  const jumpToLatest = () => {
+    nearBottomRef.current = true;
+    setNewMessageCount(0);
+    scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  };
+
+  const jumpToBeginning = () => chatScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
 
   // Realtime channel subscription for chat updates, typing indicators, and WebRTC calls
   useEffect(() => {
@@ -203,6 +224,7 @@ function ChatRoom({ session }: { session: Session }) {
 
           if (row.sender_id !== userId) {
             void markPartnerAsRead();
+            if (!nearBottomRef.current) setNewMessageCount((count) => count + 1);
             haptic("light");
           }
         },
@@ -557,6 +579,31 @@ function ChatRoom({ session }: { session: Session }) {
     return groups;
   }, [messages]);
 
+  const imageGroups = useMemo(() => {
+    const groups = new Map<string, ChatMessage[]>();
+    const minuteKey = (message: ChatMessage) => {
+      const date = new Date(message.created_at);
+      return [date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes()].join("-");
+    };
+    for (let index = 0; index < messages.length; index += 1) {
+      const first = messages[index];
+      if (!first || first.kind !== "image" || first.pending || first.failed) continue;
+      const batch = [first];
+      let cursor = index + 1;
+      while (cursor < messages.length) {
+        const next = messages[cursor];
+        if (!next || next.kind !== "image" || next.pending || next.failed || next.sender_id !== first.sender_id || minuteKey(next) !== minuteKey(first)) break;
+        batch.push(next);
+        cursor += 1;
+      }
+      if (batch.length > 1) {
+        batch.forEach((message) => groups.set(message.id, batch));
+        index += batch.length - 1;
+      }
+    }
+    return groups;
+  }, [messages]);
+
   const pinnedMessage = useMemo(
     () => messages.filter((message) => Boolean(message.pinned_at)).sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? ""))[0] ?? null,
     [messages],
@@ -673,7 +720,8 @@ function ChatRoom({ session }: { session: Session }) {
       </header>
 
       {/* Messages Scroll Area */}
-      <main className="flex-1 overflow-y-auto px-4 py-4">
+      <main ref={chatScrollRef} onScroll={handleChatScroll} className="relative flex-1 overflow-y-auto px-4 py-4">
+        {messages.length > 0 && <div className="sticky top-0 z-10 mb-2 flex justify-end"><button type="button" onClick={jumpToBeginning} className="rounded-full border border-border/70 bg-background/85 px-3 py-1.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-md">↑ Jump to beginning</button></div>}
         {pinnedMessage && (
           <button type="button" onClick={() => document.getElementById(`message-${pinnedMessage.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} className="mb-4 flex w-full items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-left text-xs">
             <Pin className="size-4 shrink-0 text-primary" /><span className="min-w-0 truncate"><strong>Pinned</strong> · {pinnedMessage.sender_id === userId ? "You" : partnerName}: {previewFor(pinnedMessage.kind, pinnedMessage.body)}</span>
@@ -688,6 +736,8 @@ function ChatRoom({ session }: { session: Session }) {
             </div>
             {group.items.map((msg) => {
               const outgoing = msg.sender_id === userId || msg.sender_email === email;
+              const mediaGroup = imageGroups.get(msg.id);
+              if (mediaGroup && mediaGroup[0]?.id !== msg.id) return null;
 
               return (
                 <MessageBubble
@@ -696,7 +746,9 @@ function ChatRoom({ session }: { session: Session }) {
                   outgoing={outgoing}
                   partnerName={partnerName}
                   isRead={Boolean(msg.read_at)}
-                  onSelectMedia={(url, kind) => setLightbox({ url, kind })}
+                  onSelectMedia={(url, kind) => setLightbox({ items: [{ url, kind, name: msg.attachment_name }], index: 0 })}
+                  mediaGroup={mediaGroup}
+                  onSelectMediaGroup={(items) => setLightbox({ items: items.map((photo) => ({ url: photo.localUrl ?? photo.attachment_url ?? "", kind: "image" as const, name: photo.attachment_name })), index: 0 })}
                   onReact={(emoji) => handleReaction(msg.id, emoji)}
                   onReply={() => setReplyTarget(msg)}
                   isPinned={Boolean(msg.pinned_at)}
@@ -724,6 +776,8 @@ function ChatRoom({ session }: { session: Session }) {
 
         <div ref={scrollRef} />
       </main>
+
+      {farFromLatest && <button type="button" onClick={jumpToLatest} className="fixed right-4 bottom-24 z-30 flex items-center gap-2 rounded-full border border-border/70 bg-background/90 px-4 py-3 text-sm font-semibold shadow-xl backdrop-blur-xl"><ArrowDown className="size-4"/>{newMessageCount > 0 ? newMessageCount + " new ↓" : "Latest ↓"}</button>}
 
       {/* Composer Input Area */}
       <Composer
@@ -754,7 +808,9 @@ function ChatRoom({ session }: { session: Session }) {
       {/* Fullscreen Media Lightbox */}
       {lightbox && (
         <Lightbox
-          item={lightbox}
+          item={lightbox.items[lightbox.index] ?? null}
+          items={lightbox.items}
+          initialIndex={lightbox.index}
           onClose={() => setLightbox(null)}
         />
       )}
