@@ -179,13 +179,6 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(!active && !winner) {
       setThinking(true);
       await new Promise((resolve) => window.setTimeout(resolve, 850));
-      const drop = (target:string) => {
-        const copy = board.map((r:string[]) => [...r]);
-        for (let rr=5;rr>=0;rr--) if (!copy[rr]?.[target as unknown as number]) { /* guarded below */ }
-        const column = Number(target);
-        for (let rr=5;rr>=0;rr--) if (!copy[rr]?.[column]) { copy[rr]![column] = "O"; return copy; }
-        return copy;
-      };
       const legal = (board[0] ?? []).map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
       const wins = (mark:string) => legal.find((c:number) => {
         const copy=board.map((r:string[])=>[...r]); for(let rr=5;rr>=0;rr--) if(!copy[rr]?.[c]) {copy[rr]![c]=mark;break;} return winnerConnect(copy)===mark;
