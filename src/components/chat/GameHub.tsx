@@ -316,7 +316,12 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     window.setTimeout(()=>setRpsCountdown(""),500);
   };
   const submitWord = async () => {
-    if(!current || Boolean(current.winner) || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
+    if(!current || current.winner || (active && !isMyTurn)) return;
+    if(answer.trim().toUpperCase()!==current.word) {
+      setNotice("Not quite — try again!");
+      if(active?.opponent_id) await updateGame({...current,turnId:userId===active.challenger_id?active.opponent_id:active.challenger_id},null);
+      return;
+    }
     const next={...current,winner:"Correct! 🎉"};
     if(active) await updateGame(next,userId); else setSoloState(next);
     setAnswer("");
@@ -333,10 +338,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       return;
     }
     if(active.opponent_id && answers[active.challenger_id]!==undefined && answers[active.opponent_id]!==undefined) {
-      const a=answers[active.challenger_id],b=answers[active.opponent_id];
-      const winnerId=a===b?null:a?active.challenger_id:active.opponent_id;
+      const scores={...(current.scores??{}),[active.challenger_id]:(current.scores?.[active.challenger_id]??0)+(answers[active.challenger_id]?1:0),[active.opponent_id]:(current.scores?.[active.opponent_id]??0)+(answers[active.opponent_id]?1:0)};
       const nextQuestion=current.question+1;
-      await updateGame({...current,question:nextQuestion,answers:{},streak:0,lastCorrect:undefined},winnerId);
+      const nextFirst=current.turnId===active.challenger_id?active.opponent_id:active.challenger_id;
+      await updateGame({...current,question:nextQuestion,answers:{},scores,turnId:nextFirst,streak:0,lastCorrect:undefined});
     } else await updateGame({...current,answers,turnId:active.opponent_id ?? current.turnId});
   };
   const nextQuizQuestion = () => {
