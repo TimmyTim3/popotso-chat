@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy } from "lucide-react";
+import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy, Send } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 import { rollFairDie, shouldRollAgain } from "@/lib/snakes-ladders";
@@ -189,6 +189,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [draughtsAnimation, setDraughtsAnimation] = useState<{from:number;to:number;piece:string}|null>(null);
   const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
+  const [gameMessages, setGameMessages] = useState<any[]>([]);
+  const [gameMessageDraft, setGameMessageDraft] = useState("");
+  const [sendingGameMessage, setSendingGameMessage] = useState(false);
+  const gameMessagesEndRef = useRef<HTMLDivElement|null>(null);
   useEffect(() => {
     if(!draughtsLastMove) return;
     const timer=window.setTimeout(()=>{setDraughtsLastMove(null);setDraughtsCaptureAt(null);},1500);
@@ -288,6 +292,30 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if (!error) { setActive(data as Challenge); void load(); }
   };
   const startSolo = (game: GameType) => { setLadderVisualPositions(null);setLadderMessage("");setDraughtsCaptureAt(null);setDraughtsAnimation(null);setDraughtsLastMove(null);setQuizFeedback(null);snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
+  useEffect(() => {
+    if (!active?.id) { setGameMessages([]); return; }
+    let alive = true;
+    const fetchMessages = async () => {
+      const { data, error } = await (supabase as any).from("game_messages").select("id,challenge_id,sender_id,message,created_at").eq("challenge_id", active.id).order("created_at", { ascending: true }).limit(100);
+      if (!error && alive) setGameMessages(data ?? []);
+    };
+    void fetchMessages();
+    const channel = supabase.channel("game-messages-" + active.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "game_messages", filter: "challenge_id=eq." + active.id }, () => void fetchMessages())
+      .subscribe();
+    return () => { alive = false; void supabase.removeChannel(channel); };
+  }, [active?.id]);
+  useEffect(() => { gameMessagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [gameMessages]);
+  const sendGameMessage = async () => {
+    const message = gameMessageDraft.trim();
+    if (!active || !message || sendingGameMessage || message.length > 500) return;
+    setSendingGameMessage(true);
+    const { error } = await (supabase as any).from("game_messages").insert({ challenge_id: active.id, sender_id: userId, message });
+    setSendingGameMessage(false);
+    if (error) { setNotice("Message couldn't be sent. Please try again."); return; }
+    setGameMessageDraft("");
+  };
+
   const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
@@ -707,6 +735,22 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
               </div>
               <div className="mt-2 flex justify-center gap-4 text-xs"><span>🔵 You: {(current?.board as any)?.positions?.[userId]??0}</span><span>🟠 {solo?"Computer":partnerName}: {(current?.board as any)?.positions?.[active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai"]??0}</span></div>
             </div>}
+            {active?.status === "active" && <section className="mt-5 rounded-2xl border border-border bg-card p-3">
+              <div className="mb-2 flex items-center justify-between"><h4 className="text-sm font-semibold">Game chat</h4><span className="text-[11px] text-muted-foreground">Quick messages</span></div>
+              <div className="max-h-36 space-y-2 overflow-y-auto rounded-xl bg-secondary/50 p-2">
+                {gameMessages.length===0 && <p className="py-3 text-center text-xs text-muted-foreground">Send a quick message without leaving the game 💬</p>}
+                {gameMessages.map((msg:any)=><div key={msg.id} className={msg.sender_id===userId?"ml-8 rounded-xl bg-primary/10 p-2":"mr-8 rounded-xl bg-secondary p-2"}>
+                  <p className="mb-0.5 text-[10px] font-semibold text-muted-foreground">{msg.sender_id===userId?"You":partnerName}</p>
+                  <p className="break-words text-sm">{msg.message}</p>
+                  <p className="mt-1 text-right text-[9px] text-muted-foreground">{new Date(msg.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</p>
+                </div>)}
+                <div ref={gameMessagesEndRef}/>
+              </div>
+              <form onSubmit={event=>{event.preventDefault();void sendGameMessage();}} className="mt-2 flex gap-2">
+                <input value={gameMessageDraft} onChange={event=>setGameMessageDraft(event.target.value)} maxLength={500} placeholder="Type a quick message…" className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm"/>
+                <button type="submit" disabled={!gameMessageDraft.trim()||sendingGameMessage} aria-label="Send game message" className="rounded-xl bg-primary px-3 text-primary-foreground disabled:opacity-50"><Send className="size-4"/></button>
+              </form>
+            </section>}
             {current?.winner && <div className="mt-4 rounded-2xl bg-primary/10 p-4 text-center"><Trophy className="mx-auto mb-1 size-6 text-primary"/><p className="font-bold">{current.winner==="draw"?"It's a draw!":current.winner==="X"?"X wins!":current.winner==="O"?"O wins!":current.winner}</p></div>}
             {notice && <p className="mt-3 text-center text-sm text-muted-foreground">{notice}</p>}
             <div className="mt-5 flex gap-2"><button onClick={()=>void reset()} className="flex-1 rounded-xl border border-border p-3 text-sm font-semibold">Play again</button><button onClick={()=>{setSelected(null);setActive(null);setSolo(false);}} className="flex-1 rounded-xl bg-secondary p-3 text-sm font-semibold">Choose another</button></div>
