@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ArrowDown, Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X } from "lucide-react";
+import { ArrowDown, Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X, Settings2 } from "lucide-react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
@@ -21,7 +21,7 @@ import {
   type MemberEmail,
 } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
-import { playSound, unlockSounds } from "@/lib/sounds";
+import { playSound, unlockSounds, setSoundsEnabled } from "@/lib/sounds";
 import { deleteBlob, deleteOutbox, getBlob, loadOutbox, putBlob, putOutbox } from "@/lib/outbox";
 import { notifyPartner } from "@/lib/push.functions";
 import { currentPushEnabled, enablePush } from "@/lib/push";
@@ -96,6 +96,10 @@ function ChatRoom({ session }: { session: Session }) {
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [showGames, setShowGames] = useState(false);
   const [showFavorites, setShowFavorites] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+  const [hideNotificationPreview, setHideNotificationPreview] = useState(() => localStorage.getItem("popotso-hide-notification-preview") === "true");
+  const [soundsEnabled, setSoundsEnabledState] = useState(() => localStorage.getItem("popotso-sounds-enabled") !== "false");
+  const [vibrationEnabled, setVibrationEnabled] = useState(() => localStorage.getItem("popotso-vibration-enabled") !== "false");
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("gameChallenge")) setShowGames(true);
@@ -121,6 +125,10 @@ function ChatRoom({ session }: { session: Session }) {
   const isNicky = email === "nicky@popotso.app" || email === "mother@popotso.app";
   const partnerEmail: MemberEmail = isNicky ? "tim@popotso.app" : "nicky@popotso.app";
   const partnerName = isNicky ? "Tim" : "Nicky";
+  const unreadCount = messages.filter((message) => message.sender_id !== userId && !message.read_at).length;
+  const updateNotificationPreview = (enabled: boolean) => { setHideNotificationPreview(enabled); localStorage.setItem("popotso-hide-notification-preview", String(enabled)); };
+  const updateSounds = (enabled: boolean) => { setSoundsEnabledState(enabled); localStorage.setItem("popotso-sounds-enabled", String(enabled)); setSoundsEnabled(enabled); };
+  const updateVibration = (enabled: boolean) => { setVibrationEnabled(enabled); localStorage.setItem("popotso-vibration-enabled", String(enabled)); };
 
   const markPartnerAsRead = useCallback(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -232,7 +240,7 @@ function ChatRoom({ session }: { session: Session }) {
           if (row.sender_id !== userId) {
             void markPartnerAsRead();
             if (!nearBottomRef.current) setNewMessageCount((count) => count + 1);
-            haptic("light");
+            if (vibrationEnabled) haptic("light");
             playSound("receive");
           }
         },
@@ -270,7 +278,7 @@ function ChatRoom({ session }: { session: Session }) {
             isVideo: payload.isVideo,
           });
           setCallWithVideo(Boolean(payload.isVideo));
-          haptic("medium");
+          if (vibrationEnabled) haptic("medium");
         }
       })
       .subscribe();
@@ -281,7 +289,7 @@ function ChatRoom({ session }: { session: Session }) {
       if (typingTimeout.current) window.clearTimeout(typingTimeout.current);
       channel.unsubscribe();
     };
-  }, [email, markPartnerAsRead, userId]);
+  }, [email, markPartnerAsRead, userId, vibrationEnabled]);
 
   const patch = (clientId: string, delta: Partial<ChatMessage>) => {
     setMessages((prev) =>
@@ -327,8 +335,9 @@ function ChatRoom({ session }: { session: Session }) {
 
       void notifyPartner({
         data: {
-          preview: previewFor(row.kind ?? "text", row.body ?? null),
+          preview: hideNotificationPreview ? "You have a new Popotso message" : previewFor(row.kind ?? "text", row.body ?? null),
           title: isNicky ? "Mother" : "Father",
+          hidePreview: hideNotificationPreview,
         },
       }).catch((error) => {
         // Push delivery must never turn a successfully-sent chat message into a failed message.
@@ -705,6 +714,7 @@ function ChatRoom({ session }: { session: Session }) {
           </button>
 
           {/* Web Push Notifications Toggle */}
+          <button type="button" onClick={() => setShowNotificationSettings((value) => !value)} className="relative flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary active:scale-95" aria-label="Notification settings"><Settings2 className="size-4" /></button>
           <button
             type="button"
             onClick={enableNotifications}
@@ -715,7 +725,7 @@ function ChatRoom({ session }: { session: Session }) {
             }`}
             aria-label="Enable notifications"
           >
-            {pushActive ? <BellRing className="size-4" /> : <Bell className="size-4" />}
+            <><span className="relative">{pushActive ? <BellRing className="size-4" /> : <Bell className="size-4" />}{unreadCount > 0 && <span className="absolute -right-2 -top-2 flex min-w-4 h-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}</span></>
           </button>
 
           <button
@@ -728,6 +738,8 @@ function ChatRoom({ session }: { session: Session }) {
           </button>
         </div>
       </header>
+
+      {showNotificationSettings && <section className="mx-3 mt-2 rounded-2xl border border-border bg-card p-3 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">Notification preferences</h2><button type="button" onClick={() => setShowNotificationSettings(false)} aria-label="Close notification settings" className="flex size-10 items-center justify-center rounded-full hover:bg-secondary"><X className="size-4"/></button></div><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Hide message previews on lock screen</span><input type="checkbox" checked={hideNotificationPreview} onChange={(event) => updateNotificationPreview(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>App sounds</span><input type="checkbox" checked={soundsEnabled} onChange={(event) => updateSounds(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Vibration on selected alerts</span><input type="checkbox" checked={vibrationEnabled} onChange={(event) => updateVibration(event.target.checked)} className="size-5 accent-primary"/></label><p className="mt-1 text-[11px] text-muted-foreground">These preferences are stored on this device. Android notification permission and device sound settings still apply.</p></section>}
 
       {/* Messages Scroll Area */}
       <main ref={chatScrollRef} onScroll={handleChatScroll} className="relative flex-1 overflow-y-auto px-4 py-4">
