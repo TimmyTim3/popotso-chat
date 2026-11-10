@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star, Phone, PhoneOff, Video } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star, Phone, PhoneOff, Video, Trash2 } from "lucide-react";
 
 import { ProgressRing } from "@/components/chat/ProgressRing";
 import { VoiceNote } from "@/components/chat/VoiceNote";
@@ -19,6 +19,7 @@ interface MessageBubbleProps {
   onSelectMediaGroup?: (items: ChatMessage[]) => void;
   onReact?: (emoji: string) => void;
   onRetry?: () => void;
+  onDeleteFailed?: () => void;
   onEdit?: (message: ChatMessage) => void;
   onReply?: () => void;
   replyPreview?: { sender: string; text: string; messageId?: string } | null;
@@ -39,6 +40,7 @@ export function MessageBubble({
   onSelectMediaGroup,
   onReact,
   onRetry,
+  onDeleteFailed,
   onEdit,
   onReply,
   replyPreview,
@@ -498,14 +500,25 @@ export function MessageBubble({
         {copied ? (
           <span className="font-medium text-primary">Copied</span>
         ) : message.failed ? (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="flex items-center gap-1 font-semibold text-destructive hover:underline"
-          >
-            <RefreshCw className="size-3" />
-            <span>Not Delivered • Tap to Retry</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-destructive">Not delivered</span>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="inline-flex min-h-8 items-center gap-1 rounded-full bg-primary/10 px-2.5 font-semibold text-primary hover:bg-primary/15"
+            >
+              <RefreshCw className="size-3" />
+              <span>Resend</span>
+            </button>
+            <button
+              type="button"
+              onClick={onDeleteFailed}
+              className="inline-flex min-h-8 items-center gap-1 rounded-full bg-destructive/10 px-2.5 font-semibold text-destructive hover:bg-destructive/15"
+            >
+              <Trash2 className="size-3" />
+              <span>Delete</span>
+            </button>
+          </div>
         ) : message.pending ? (
           <span className="flex items-center gap-1">
             <Clock className="size-3 animate-spin" />
