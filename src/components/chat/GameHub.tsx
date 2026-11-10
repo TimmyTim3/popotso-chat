@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
+import { rollFairDie, shouldRollAgain } from "@/lib/snakes-ladders";
 
 type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders" | "draughts";
 type GameState = {
@@ -177,12 +178,19 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [rpsCountdown, setRpsCountdown] = useState("");
   const [selectedDraughtsPiece, setSelectedDraughtsPiece] = useState<number|null>(null);
   const [ladderDiceRolling, setLadderDiceRolling] = useState(false);
+  const [ladderDiceFace, setLadderDiceFace] = useState(1);
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
   const snakeTouchStart = useRef<{x:number;y:number}|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
+
+  useEffect(() => {
+    if (!ladderDiceRolling) return;
+    const timer = window.setInterval(() => setLadderDiceFace(rollFairDie()), 90);
+    return () => window.clearInterval(timer);
+  }, [ladderDiceRolling]);
 
   const setSnakeDirection = (direction: "up" | "down" | "left" | "right") => {
     const currentDirection=snakeDirectionRef.current;
@@ -386,9 +394,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     setBusy(true); setLadderMessage("");
     const animateTurn = async (positions:Record<string,number>, player:string) => {
       const start=positions[player]??0;
-      const dice=1+Math.floor(Math.random()*6);
+      const dice=rollFairDie();
       setLadderDiceRolling(true);
-      await new Promise(resolve=>window.setTimeout(resolve,850));
+      await new Promise(resolve=>window.setTimeout(resolve,3000));
+      setLadderDiceFace(dice);
       setLadderDiceRolling(false);
       const landing=start+dice;
       const destination=landing>100?start:(SNAKES_LADDERS[landing]??landing);
@@ -417,12 +426,35 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       let positions=first.positions;
       let winner=positions[userId]===100?"You win!":null;
       const opponentId=active?(userId===active.challenger_id?active.opponent_id??userId:active.challenger_id):"ai";
-      let next={...current,board:{positions,dice:first.dice},turnId:opponentId,winner};
-      if(!active&&!winner){
+      let lastRoll=first.dice;
+      let earnedExtraTurn=shouldRollAgain(lastRoll,winner);
+      if(earnedExtraTurn) setLadderMessage("You rolled a 6 — your turn again! 🎲");
+      while(shouldRollAgain(lastRoll,winner)) {
+        const extra=await animateTurn(positions,userId);
+        positions=extra.positions;
+        lastRoll=extra.dice;
+        winner=positions[userId]===100?"You win!":null;
+        if(shouldRollAgain(lastRoll,winner)) {
+          earnedExtraTurn=true;
+          setLadderMessage("You rolled a 6 — your turn again! 🎲");
+        }
+      }
+      let next={...current,board:{positions,dice:lastRoll},turnId:shouldRollAgain(lastRoll,winner)?userId:opponentId,winner};
+      if(!active&&!winner&&!shouldRollAgain(lastRoll,winner)){
+        setLadderMessage("Computer's turn…");
         await new Promise(resolve=>window.setTimeout(resolve,650));
-        const ai=await animateTurn(positions,"ai"); positions=ai.positions;
-        winner=positions.ai===100?"Computer wins!":null;
-        next={...next,board:{positions,dice:ai.dice},turnId:userId,winner};
+        let aiRoll=0;
+        do {
+          const ai=await animateTurn(positions,"ai");
+          positions=ai.positions;
+          aiRoll=ai.dice;
+          winner=positions["ai"]===100?"Computer wins!":null;
+          next={...next,board:{positions,dice:aiRoll},turnId:aiRoll===6&&!winner?"ai":userId,winner};
+          if(shouldRollAgain(aiRoll,winner)) setLadderMessage("Computer rolled a 6 — it rolls again! 🎲");
+        } while(shouldRollAgain(aiRoll,winner));
+        if(!winner&&!shouldRollAgain(aiRoll,winner)) setLadderMessage("Your turn — roll the dice!");
+      } else if(active && !shouldRollAgain(lastRoll,winner) && !winner) {
+        setLadderMessage(earnedExtraTurn?"You rolled a 6 and took your extra turn — opponent's turn.":"Your turn is over — opponent's turn.");
       }
       if(active) await updateGame(next,winner?userId:undefined); else setSoloState(next);
     } finally { setBusy(false); }
@@ -602,7 +634,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             </div>}
             {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
               <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
-              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling?["⚀","⚁","⚂","⚃","⚄","⚅"][Math.floor(Date.now()/90)%6]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
+              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
               <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border border-border bg-secondary p-1">
                 {Array.from({length:100},(_,index)=>{
                   const row=Math.floor(index/10),col=index%10,rowFromBottom=9-row;
