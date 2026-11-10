@@ -171,7 +171,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       });
     },170);
     return ()=>window.clearInterval(timer);
-  },[game,solo]);
+  },[selected,solo]);
 
   const load = useCallback(async () => {
     const { data, error } = await (supabase as any).from("game_challenges").select("*").order("created_at", { ascending: false }).limit(30);
