@@ -61,6 +61,15 @@ export function VoiceCallModal({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+
+  const flushPendingIceCandidates = async (pc: RTCPeerConnection) => {
+    const pending = pendingIceCandidatesRef.current.splice(0);
+    for (const candidate of pending) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+      catch (error) { console.warn("Could not apply queued call network candidate", error); }
+    }
+  };
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
