@@ -191,6 +191,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
   const [draughtsAnimation, setDraughtsAnimation] = useState<DraughtsAnimation|null>(null);
   const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
+  const [connectLastDrop, setConnectLastDrop] = useState<{row:number;col:number;mark:string}|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
   const [gameMessages, setGameMessages] = useState<any[]>([]);
   const [gameMessageDraft, setGameMessageDraft] = useState("");
@@ -424,34 +425,46 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       setThinking(false);
     }
     if (winner) next = { ...next, winner, winnerLine };
-    if (active) await updateGame(next, winner ? (winner === "draw" ? null : winner === "X" ? active.challenger_id : active.opponent_id) : undefined);
-    else setSoloState(next);
-  };
-  const playConnect = async (col: number) => {
-    if (!current || winnerConnect(current.board) || !isMyTurn) return;
+    if (active) await updateGame(next, winner ? (winner === "draw" ? null : wi  const playConnect = async (col: number) => {
+    if (!current || current.winner || winnerConnect(current.board) || !isMyTurn || thinking || busy || waiting) return;
     const board = dropConnectDisc(current.board, col, active ? playerMark : "X");
     if (!board) return;
+    const playerMarkForDrop = active ? playerMark : "X";
+    const playerRow = board.findIndex((row:string[], index:number) => row[col] !== (current.board as string[][])[index]?.[col]);
+    setConnectLastDrop({ row: playerRow, col, mark: playerMarkForDrop });
     let winner = winnerConnect(board);
     let winnerLine = findConnectWinningLine(board)?.map(([row,col])=>row*7+col) ?? undefined;
-    let next = { ...current, board, turnId: active ? (userId===active.challenger_id?(active.opponent_id ?? userId):active.challenger_id) : "ai" };
-    if(!active && !winner) {
-      setThinking(true);
-      await new Promise((resolve) => window.setTimeout(resolve, 850));
-      const legal = (board[0] ?? []).map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
-      const wins = (mark:string) => legal.find((column:number) => {
-        const trial=dropConnectDisc(board,column,mark);
-        return trial ? winnerConnect(trial)===mark : false;
-      });
-      const chosen = wins("O") ?? wins("X") ?? [...legal].sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
-      if (chosen !== undefined) {
-        const aiBoard=dropConnectDisc(board,chosen,"O");
-        if(aiBoard) { board.splice(0,board.length,...aiBoard); winner=winnerConnect(board); winnerLine=findConnectWinningLine(board)?.map(([row,col])=>row*7+col) ?? undefined; }
-      }
-      next={...next,board,turnId:userId};
-      setThinking(false);
+    let next: GameState = { ...current, board, turnId: active ? (userId===active.challenger_id?(active.opponent_id ?? userId):active.challenger_id) : "ai", winner: winner ?? null, winnerLine };
+    if (active) {
+      await updateGame(next, winner ? (winner==="draw" ? null : winner==="X" ? active.challenger_id : active.opponent_id) : undefined);
+      return;
     }
-    if(winner) next={...next,winner,winnerLine};
-    if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
+    // Render the player's disc immediately, then give the computer a full three-second turn pause.
+    setSoloState(next);
+    if (winner) return;
+    setThinking(true);
+    await new Promise(resolve => window.setTimeout(resolve, 3000));
+    const legal = (board[0] ?? []).map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
+    const wins = (mark:string) => legal.find((column:number) => {
+      const trial=dropConnectDisc(board,column,mark);
+      return trial ? winnerConnect(trial)===mark : false;
+    });
+    const chosen = wins("O") ?? wins("X") ?? [...legal].sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
+    if (chosen !== undefined) {
+      const aiBoard=dropConnectDisc(board,chosen,"O");
+      if(aiBoard) {
+        const aiRow=aiBoard.findIndex((row:string[],index:number)=>row[chosen]!==board[index]?.[chosen]);
+        setConnectLastDrop({row:aiRow,col:chosen,mark:"O"});
+        const aiWinner=winnerConnect(aiBoard);
+        const aiLine=findConnectWinningLine(aiBoard)?.map(([row,col])=>row*7+col) ?? undefined;
+        next={...next,board:aiBoard,turnId:userId,winner:aiWinner??null,winnerLine:aiLine};
+        setSoloState(next);
+        await new Promise(resolve=>window.setTimeout(resolve,750));
+      }
+    }
+    setThinking(false);
+  };
+raw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
   const playDraughts = async (square:number) => {
     if(!current || current.winner || thinking || waiting || busy || draughtsAnimation || !isMyTurn) return;
@@ -752,8 +765,9 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
               {current?.winnerLine?.length===3 && <svg viewBox="0 0 300 300" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><line x1={(current.winnerLine[0]!%3)*100+50} y1={Math.floor(current.winnerLine[0]!/3)*100+50} x2={(current.winnerLine[2]!%3)*100+50} y2={Math.floor(current.winnerLine[2]!/3)*100+50} stroke="currentColor" strokeWidth="8" strokeLinecap="round" className="text-primary"/></svg>}
             </div>}
             {game==="connect-four" && <div className="mx-auto max-w-[340px]">
+              <style>{'@keyframes connect-four-disc-drop{0%{transform:translateY(-650%);opacity:.55}68%{transform:translateY(7%)}84%{transform:translateY(-3%)}100%{transform:translateY(0);opacity:1}}'}</style>
               <div className="mb-1 grid grid-cols-7 gap-1">{Array.from({length:7},(_,col)=><button key={col} type="button" onClick={()=>void playConnect(col)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting||Boolean(current?.board?.[0]?.[col])} aria-label={`Drop disc in column ${col+1}`} className="rounded-t-lg bg-blue-700 py-2 text-sm font-bold text-white disabled:opacity-40">↓</button>)}</div>
-              <div className="relative grid grid-cols-7 gap-1 rounded-b-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><div key={r+"-"+c} className={`aspect-square rounded-full border border-blue-800 transition-all duration-300 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"} ${v?"animate-[bounce-in_250ms_ease-out]":""} ${current?.winnerLine?.includes(r*7+c)?"ring-4 ring-white shadow-[0_0_0_3px_rgba(255,255,255,0.45)]":""}`}/>))}
+              <div className="relative grid grid-cols-7 gap-1 rounded-b-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><div key={r+"-"+c} className={`aspect-square rounded-full border border-blue-800 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"} ${current?.winnerLine?.includes(r*7+c)?"ring-4 ring-white shadow-[0_0_0_3px_rgba(255,255,255,0.45)]":""}`} style={connectLastDrop?.row===r&&connectLastDrop?.col===c&&connectLastDrop?.mark===v?{animation:"connect-four-disc-drop 720ms cubic-bezier(.22,.8,.25,1) both"}:undefined}/>))}
                 {current?.winnerLine?.length===4 && <svg viewBox="0 0 700 600" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><line x1={(current.winnerLine[0]!%7)*100+50} y1={Math.floor(current.winnerLine[0]!/7)*100+50} x2={(current.winnerLine[3]!%7)*100+50} y2={Math.floor(current.winnerLine[3]!/7)*100+50} stroke="white" strokeWidth="13" strokeLinecap="round"/></svg>}
               </div>
             </div>}
