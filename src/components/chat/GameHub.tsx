@@ -110,9 +110,11 @@ const getDraughtsLegalMoves = (board:string[],side:string,forcedPiece:number|nul
   return captures.length?captures:moves;
 };
 const applyDraughtsMove = (board:string[],move:DraughtsMove) => {
-  const next=[...board],piece=next[move.from]!;
-  next[move.from]=""; next[move.to]=piece;
-  if(move.capture!==null)next[move.capture]="";
+  const next=[...board],piece=next[move.from];
+  if(!piece || move.from<0 || move.from>=64 || move.to<0 || move.to>=64 || (move.capture!==null&&(move.capture<0||move.capture>=64))) return {board:[...board],forcedPiece:null};
+  next[move.from]="";
+  if(move.capture!==null) next[move.capture]="";
+  next[move.to]=piece;
   const row=Math.floor(move.to/8);
   if(piece==="r"&&row===0)next[move.to]="R";
   if(piece==="b"&&row===7)next[move.to]="B";
@@ -183,6 +185,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
+  const [draughtsAnimation, setDraughtsAnimation] = useState<{from:number;to:number;piece:string}|null>(null);
+  const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
   const snakeTouchStart = useRef<{x:number;y:number}|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
@@ -277,7 +281,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     }).eq("id", active.id).select("*").single();
     if (!error) { setActive(data as Challenge); void load(); }
   };
-  const startSolo = (game: GameType) => { setLadderVisualPositions(null);setLadderMessage("");setDraughtsCaptureAt(null);setQuizFeedback(null);snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
+  const startSolo = (game: GameType) => { setLadderVisualPositions(null);setLadderMessage("");setDraughtsCaptureAt(null);setDraughtsAnimation(null);setDraughtsLastMove(null);setQuizFeedback(null);snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
   const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
@@ -333,26 +337,31 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
   const playDraughts = async (square:number) => {
-    if(!current || current.winner || thinking || waiting || !isMyTurn) return;
-    const side=solo?"r":(active?.challenger_id===userId?"r":"b");
-    const board=current.board as string[];
+    if(!current || current.winner || thinking || waiting || busy || draughtsAnimation || !isMyTurn) return;
+    const side=solo?(current.turnId==="ai"?"b":"r"):(active?.challenger_id===userId?"r":"b");
+    const board=[...(current.board as string[])];
     const forced=current.forcedPiece??null;
     const legal=getDraughtsLegalMoves(board,side,forced);
     if(selectedDraughtsPiece===null){
-      if(board[square]&&draughtsSide(board[square])===side&&legal.some(move=>move.from===square)){
-        setSelectedDraughtsPiece(square);
-      }
+      if(board[square]&&draughtsSide(board[square]!)===side&&legal.some(move=>move.from===square)) setSelectedDraughtsPiece(square);
       return;
     }
-    if(board[square]&&draughtsSide(board[square])===side){
-      if(legal.some(move=>move.from===square))setSelectedDraughtsPiece(square);
+    if(board[square]&&draughtsSide(board[square]!)===side){
+      if(legal.some(move=>move.from===square)) setSelectedDraughtsPiece(square);
       return;
     }
     const move=legal.find(candidate=>candidate.from===selectedDraughtsPiece&&candidate.to===square);
     if(!move){setSelectedDraughtsPiece(null);return;}
+    const animateMove=async (moveToAnimate:DraughtsMove,piece:string) => {
+      setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece});
+      await new Promise(resolve=>window.setTimeout(resolve,560));
+      setDraughtsAnimation(null);
+      setDraughtsLastMove({from:moveToAnimate.from,to:moveToAnimate.to,capture:moveToAnimate.capture});
+      if(moveToAnimate.capture!==null) setDraughtsCaptureAt(moveToAnimate.capture);
+      else setDraughtsCaptureAt(null);
+    };
+    await animateMove(move,board[move.from]!);
     let applied=applyDraughtsMove(board,move);
-    if(move.capture!==null){setDraughtsCaptureAt(move.capture);setNotice(`${side==="r"?"Red":"Black"} captured a ${draughtsSide(board[move.capture]!)==="r"?"red":"black"} piece!`);}
-    else {setDraughtsCaptureAt(null);setNotice("Piece moved.");}
     let nextBoard=applied.board;
     let nextForced=applied.forcedPiece;
     let nextSide=nextForced!==null?side:(side==="r"?"b":"r");
@@ -361,19 +370,20 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     setSelectedDraughtsPiece(nextForced);
     if(solo&&!winner&&nextSide==="b"){
       setThinking(true);
-      await new Promise(resolve=>window.setTimeout(resolve,700));
-      let aiBoard=nextBoard,aiForced: number|null=null,aiWinner:string|null=null;
+      await new Promise(resolve=>window.setTimeout(resolve,350));
+      let aiBoard=nextBoard,aiForced:number|null=null,aiWinner:string|null=null;
       let safety=0;
       do {
         const aiMoves=getDraughtsLegalMoves(aiBoard,"b",aiForced);
         if(!aiMoves.length)break;
-        const captureMoves=aiMoves.filter(candidate=>candidate.capture!==null);
-        const choices=captureMoves.length?captureMoves:aiMoves;
+        const captures=aiMoves.filter(candidate=>candidate.capture!==null);
+        const choices=captures.length?captures:aiMoves;
         const aiMove=choices[Math.floor(Math.random()*choices.length)]!;
+        await animateMove(aiMove,aiBoard[aiMove.from]!);
         const aiApplied=applyDraughtsMove(aiBoard,aiMove);
-        aiBoard=aiApplied.board; aiForced=aiApplied.forcedPiece;
+        aiBoard=aiApplied.board;
+        aiForced=aiApplied.forcedPiece;
         aiWinner=getDraughtsWinner(aiBoard);
-        if(aiForced!==null&&!aiWinner)await new Promise(resolve=>window.setTimeout(resolve,350));
         safety++;
       } while(aiForced!==null&&!aiWinner&&safety<12);
       const finalWinner=aiWinner??getDraughtsWinner(aiBoard);
@@ -383,8 +393,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       setThinking(false);
       return;
     }
-    if(winner)next={...next,winner:next.winner};
-    if(active)await updateGame(next,winner?(winner==="r"?active.challenger_id:active.opponent_id):undefined);
+    if(active) await updateGame(next,winner?(winner==="r"?active.challenger_id:active.opponent_id):undefined);
     else setSoloState(next);
     if(nextForced===null)setSelectedDraughtsPiece(null);
   };
@@ -619,21 +628,29 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                 <span className="text-muted-foreground">{solo?(current?.turnId==="ai"?"Computer's turn":"Your turn"):(isMyTurn?"Your turn":"Opponent's turn")}</span>
                 <span className="font-semibold">⚫ Black: {(current?.board as string[] ?? []).filter(piece=>draughtsSide(piece)==="b").length}</span>
               </div>
-              <div className="grid grid-cols-8 overflow-hidden rounded-xl border-4 border-amber-950 shadow-lg">
-                {(current?.board as string[] ?? []).map((piece:string,index:number)=>{
-                  const row=Math.floor(index/8),col=index%8;
-                  const side=solo?"r":(active?.challenger_id===userId?"r":"b");
-                  const legal=getDraughtsLegalMoves((current?.board as string[]) ?? [],side,current?.forcedPiece??null);
-                  const selectable=legal.some(move=>move.from===index);
-                  const target=selectedDraughtsPiece!==null&&legal.some(move=>move.from===selectedDraughtsPiece&&move.to===index);
-                  const selected=selectedDraughtsPiece===index;
-                  return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(draughtsCaptureAt===index?"ring-4 ring-inset ring-rose-500 animate-pulse":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
-                    {piece&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md transition-all duration-200 ease-out "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
-                    {selectable&&!piece&&<span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-emerald-300"/>}
-                  </button>;
-                })}
+              <div className="relative aspect-square overflow-hidden rounded-xl border-4 border-amber-950 shadow-lg">
+                <div className="grid h-full w-full grid-cols-8">
+                  {(current?.board as string[] ?? []).map((piece:string,index:number)=>{
+                    const row=Math.floor(index/8),col=index%8;
+                    const side=solo?(current?.turnId==="ai"?"b":"r"):(active?.challenger_id===userId?"r":"b");
+                    const board=(current?.board as string[]) ?? [];
+                    const legal=getDraughtsLegalMoves(board,side,current?.forcedPiece??null);
+                    const selectable=legal.some(move=>move.from===index);
+                    const target=selectedDraughtsPiece!==null&&legal.some(move=>move.from===selectedDraughtsPiece&&move.to===index);
+                    const selected=selectedDraughtsPiece===index;
+                    const movingSource=draughtsAnimation?.from===index;
+                    const traced=draughtsLastMove&&(draughtsLastMove.from===index||draughtsLastMove.to===index);
+                    return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||busy||Boolean(draughtsAnimation)||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(traced?"ring-2 ring-inset ring-sky-300/80":"")+" "+(draughtsCaptureAt===index?"ring-4 ring-inset ring-rose-500":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
+                      {piece&&!movingSource&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
+                      {selectable&&!piece&&<span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-emerald-300"/>}
+                    </button>;
+                  })}
+                </div>
+                {draughtsAnimation&&<div className="pointer-events-none absolute left-0 top-0 z-30 flex h-[12.5%] w-[12.5%] items-center justify-center transition-transform duration-[560ms] ease-in-out" style={{transform:"translate("+((draughtsAnimation.to%8-draughtsAnimation.from%8)*800)+"%, "+((Math.floor(draughtsAnimation.to/8)-Math.floor(draughtsAnimation.from/8))*800)+"%)"}}>
+                  <span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-xl "+(draughtsSide(draughtsAnimation.piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"♛":""}</span>
+                </div>}
               </div>
-              <p className="mt-3 text-center text-xs text-muted-foreground">{current?.forcedPiece!==null&&current?.forcedPiece!==undefined?"You must continue jumping with the selected piece.":"Tap one of your pieces, then tap a highlighted square to move."} Kings can move and capture backwards.</p>
+              <p className="mt-3 text-center text-xs text-muted-foreground">{current?.forcedPiece!==null&&current?.forcedPiece!==undefined?"You must continue jumping with the selected piece.":"Tap one of your pieces, then tap a highlighted square to move."} Kings can move and capture backwards. Recent move is briefly traced on the board.</p>
               <button onClick={()=>setSelectedDraughtsPiece(null)} className="mt-2 w-full rounded-xl border border-border p-2 text-xs font-semibold">Clear selection</button>
             </div>}
             {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border bg-card p-5 text-4xl shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-md active:scale-90 disabled:opacity-50">{e}</button>)}</div>}
