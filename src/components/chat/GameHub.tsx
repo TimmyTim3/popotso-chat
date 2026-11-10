@@ -188,6 +188,11 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [draughtsAnimation, setDraughtsAnimation] = useState<{from:number;to:number;piece:string}|null>(null);
   const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
+  useEffect(() => {
+    if(!draughtsLastMove) return;
+    const timer=window.setTimeout(()=>{setDraughtsLastMove(null);setDraughtsCaptureAt(null);},1500);
+    return ()=>window.clearTimeout(timer);
+  },[draughtsLastMove]);
   const snakeTouchStart = useRef<{x:number;y:number}|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
 
