@@ -14,6 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
+      game_challenges: {
+        Row: {
+          challenger_id: string
+          created_at: string
+          game_type: string
+          id: string
+          opponent_id: string | null
+          state: Json
+          status: string
+          updated_at: string
+          winner_id: string | null
+        }
+        Insert: {
+          challenger_id: string
+          created_at?: string
+          game_type: string
+          id?: string
+          opponent_id?: string | null
+          state?: Json
+          status?: string
+          updated_at?: string
+          winner_id?: string | null
+        }
+        Update: {
+          challenger_id?: string
+          created_at?: string
+          game_type?: string
+          id?: string
+          opponent_id?: string | null
+          state?: Json
+          status?: string
+          updated_at?: string
+          winner_id?: string | null
+        }
+        Relationships: []
+      }
       messages: {
         Row: {
           attachment_name: string | null
@@ -26,10 +62,13 @@ export type Database = {
           created_at: string
           duration_ms: number | null
           edited_at: string | null
+          favorited_by: string[]
           id: string
           kind: string
+          pinned_at: string | null
           reactions: Json | null
           read_at: string | null
+          reply_to_id: string | null
           sender_email: string
           sender_id: string
         }
@@ -44,10 +83,13 @@ export type Database = {
           created_at?: string
           duration_ms?: number | null
           edited_at?: string | null
+          favorited_by?: string[]
           id?: string
           kind?: string
+          pinned_at?: string | null
           reactions?: Json | null
           read_at?: string | null
+          reply_to_id?: string | null
           sender_email: string
           sender_id: string
         }
@@ -62,14 +104,25 @@ export type Database = {
           created_at?: string
           duration_ms?: number | null
           edited_at?: string | null
+          favorited_by?: string[]
           id?: string
           kind?: string
+          pinned_at?: string | null
           reactions?: Json | null
           read_at?: string | null
+          reply_to_id?: string | null
           sender_email?: string
           sender_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "messages_reply_to_id_fkey"
+            columns: ["reply_to_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       push_subscriptions: {
         Row: {
