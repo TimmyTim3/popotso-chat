@@ -849,7 +849,16 @@ function ChatRoom({ session }: { session: Session }) {
           channel={channelRef.current}
           initialVideo={callWithVideo}
           incomingCall={incomingCall}
-          onClose={() => {
+          onClose={(summary) => {
+            const callRecord = {
+              type: "call",
+              outcome: summary.outcome,
+              video: summary.video,
+              durationSeconds: summary.durationSeconds,
+              dataBytes: summary.dataBytes,
+              startedAt: new Date().toISOString(),
+            };
+            void insert({ kind: "text", body: `[[POPOSO_CALL]]${JSON.stringify(callRecord)}` });
             setInCall(false);
             setIncomingCall(null);
           }}
