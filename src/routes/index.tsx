@@ -255,6 +255,7 @@ function ChatRoom({ session }: { session: Session }) {
           setMessages((prev) =>
             prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
           );
+          if (updated.sender_id === userId && updated.read_at) playSound("delivered");
         },
       )
       .on("broadcast", { event: "typing" }, (event) => {
