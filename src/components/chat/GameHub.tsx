@@ -17,7 +17,7 @@ type GameState = {
   winner?: string | null;
   questionPool?: number[];
   streak?: number;
-  lastCorrect?: boolean;
+  lastCorrect?: boolean | undefined;
 };
 type Challenge = {
   id: string; game_type: GameType; challenger_id: string; opponent_id: string | null;
