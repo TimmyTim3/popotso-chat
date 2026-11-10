@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface LightboxItem {
   url: string;
@@ -16,9 +16,10 @@ interface LightboxProps {
 
 export function Lightbox({ item, onClose, items = [], initialIndex = 0 }: LightboxProps) {
   const [index, setIndex] = useState(initialIndex);
+  const touchStartX = useRef<number | null>(null);
   const gallery = items.length ? items : item ? [item] : [];
   const activeItem = gallery[index] ?? item;
-  useEffect(() => { setIndex(initialIndex); }, [initialIndex, items]);
+  useEffect(() => { setIndex(initialIndex); }, [initialIndex]);
   useEffect(() => {
     if (!item) return;
     const onKey = (event: KeyboardEvent) => {
@@ -51,7 +52,7 @@ export function Lightbox({ item, onClose, items = [], initialIndex = 0 }: Lightb
       >
         <X className="size-4" />
       </button>
-      <div className="max-h-full w-full max-w-4xl" onClick={(event) => event.stopPropagation()}>
+      <div className="max-h-full w-full max-w-4xl" onClick={(event) => event.stopPropagation()} onTouchStart={(event) => { touchStartX.current = event.changedTouches[0]?.clientX ?? null; }} onTouchEnd={(event) => { const start = touchStartX.current; touchStartX.current = null; const end = event.changedTouches[0]?.clientX ?? start ?? 0; if (start !== null && Math.abs(end - start) > 45) setIndex((current) => Math.max(0, Math.min(gallery.length - 1, current + (end < start ? 1 : -1)))); }}>
         {activeItem.kind === "image" ? (
           <img
             src={activeItem.url}
