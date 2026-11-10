@@ -83,6 +83,7 @@ const initialState = (game: GameType, first: string): GameState => ({
   snakeDirection: "right", snakeNextDirection: "right",
 });
 type DraughtsMove = { from: number; to: number; capture: number | null };
+type DraughtsAnimation = { from: number; to: number; piece: string; phase: "start" | "moving" };
 const createDraughtsBoard = () => {
   const board=Array(64).fill("");
   for(let row=0;row<3;row++)for(let col=0;col<8;col++)if((row+col)%2===1)board[row*8+col]="b";
@@ -158,6 +159,12 @@ const winnerConnect = (board: string[][]) => {
   return line ? board[line[0]![0]]![line[0]![1]]! : board.every(row=>row.every(Boolean)) ? "draw" : null;
 };
 const SNAKES_LADDERS: Record<number, number> = { 4:14, 9:31, 20:38, 28:84, 40:59, 63:81, 71:91, 17:7, 54:34, 62:19, 64:60, 87:24, 93:73, 95:75, 99:78 };
+const resolveLadderCollision = (positions: Record<string, number>, player: string, destination: number) => {
+  const next = { ...positions, [player]: destination };
+  const opponent = Object.keys(next).find((id) => id !== player && next[id] === destination);
+  if (opponent) next[opponent] = 0;
+  return { positions: next, kickedPlayer: opponent ?? null };
+};
 const advanceLadderBoard = (positions: Record<string, number>, player: string, dice: number) => {
   const current=positions[player] ?? 0;
   const landing=current+dice;
@@ -188,7 +195,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
-  const [draughtsAnimation, setDraughtsAnimation] = useState<{from:number;to:number;piece:string}|null>(null);
+  const [draughtsAnimation, setDraughtsAnimation] = useState<DraughtsAnimation|null>(null);
   const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
   const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
   const [gameMessages, setGameMessages] = useState<any[]>([]);
@@ -353,7 +360,9 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       } else if (active.game_type === "snakes-ladders") {
         const positions={...((state.board as any)?.positions??{})};
         const dice=rollFairDie();const start=positions[missing]??0;const landing=start+dice;
-        positions[missing]=landing>100?start:(SNAKES_LADDERS[landing]??landing);
+        const destination=landing>100?start:(SNAKES_LADDERS[landing]??landing);
+        const collision=resolveLadderCollision(positions,missing,destination);
+        Object.assign(positions,collision.positions);
         winner=positions[missing]===100?"Computer reached 100! 🤖":null;
         next={...state,board:{...state.board,positions,dice},turnId:winner?missing:(dice===6?missing:(missing===active.challenger_id?active.opponent_id!:active.challenger_id)),winner};
       } else return;
@@ -467,8 +476,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const move=legal.find(candidate=>candidate.from===selectedDraughtsPiece&&candidate.to===square);
     if(!move){setSelectedDraughtsPiece(null);return;}
     const animateMove=async (moveToAnimate:DraughtsMove,piece:string) => {
-      setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece});
-      await new Promise(resolve=>window.setTimeout(resolve,560));
+      setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece,phase:"start"});
+      await new Promise<void>(resolve=>window.requestAnimationFrame(()=>resolve()));
+      setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece,phase:"moving"});
+      await new Promise(resolve=>window.setTimeout(resolve,950));
       setDraughtsAnimation(null);
       setDraughtsLastMove({from:moveToAnimate.from,to:moveToAnimate.to,capture:moveToAnimate.capture});
       if(moveToAnimate.capture!==null) setDraughtsCaptureAt(moveToAnimate.capture);
@@ -484,10 +495,12 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     setSelectedDraughtsPiece(nextForced);
     if(solo&&!winner&&nextSide==="b"){
       setThinking(true);
-      await new Promise(resolve=>window.setTimeout(resolve,350));
+      // Give the player's completed move time to settle before the computer responds.
+      await new Promise(resolve=>window.setTimeout(resolve,1100));
       let aiBoard=nextBoard,aiForced:number|null=null,aiWinner:string|null=null;
       let safety=0;
       do {
+        if (safety > 0) await new Promise(resolve=>window.setTimeout(resolve,450));
         const aiMoves=getDraughtsLegalMoves(aiBoard,"b",aiForced);
         if(!aiMoves.length)break;
         const captures=aiMoves.filter(candidate=>candidate.capture!==null);
@@ -547,8 +560,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
           await new Promise(resolve=>window.setTimeout(resolve,55));
         }
       }
-      nextPositions[player]=destination;
-      return {positions:nextPositions,dice,destination,landing};
+      const collision=resolveLadderCollision(nextPositions,player,destination);
+      Object.assign(nextPositions,collision.positions);
+      if(collision.kickedPlayer) setLadderMessage(player==="ai"?"You were landed on — back to start!":"You landed on your opponent — they go back to start!");
+      return {positions:nextPositions,dice,destination,landing,kickedPlayer:collision.kickedPlayer};
     };
     try {
       const positions=(current.board as any).positions??{};
@@ -569,6 +584,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
           if(active) await updateGame(next); else setSoloState(next);
           return;
         }
+        if(result.kickedPlayer) setLadderMessage(result.kickedPlayer===userId?"Your opponent landed on you — back to start!":"You landed on your opponent — they go back to start!");
         if(active) {
           const opponentId=userId===active.challenger_id?(active.opponent_id??userId):active.challenger_id;
           const next={...current,board:{positions:nextPositions,dice:result.dice},turnId:opponentId,winner:null};
@@ -580,18 +596,20 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         let computerPositions=nextPositions;
         let computerRoll=0;
         let computerWinner:string|null=null;
+        let computerKickedPlayer:string|null=null;
         do {
           setLadderMessage("Computer's turn…");
           await new Promise(resolve=>window.setTimeout(resolve,550));
           const ai=await animateTurn(computerPositions,"ai");
           computerPositions=ai.positions;
           computerRoll=ai.dice;
+          computerKickedPlayer=ai.kickedPlayer;
           computerWinner=computerPositions.ai===100?"Computer wins!":null;
           if(computerWinner) break;
           if(computerRoll===6) setLadderMessage("Computer rolled a 6 — it gets another turn! 🎲");
         } while(computerRoll===6);
         const next={...current,board:{positions:computerPositions,dice:computerRoll},turnId:userId,winner:computerWinner};
-        setLadderMessage(computerWinner?"Computer reached 100 — game over!":"Your turn — roll the dice!");
+        setLadderMessage(computerWinner?"Computer reached 100 — game over!":computerKickedPlayer===userId?"Computer landed on you — back to start!":"Your turn — roll the dice!");
         setSoloState(next);
         return;
       }
@@ -766,7 +784,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                     </button>;
                   })}
                 </div>
-                {draughtsAnimation&&<div className="pointer-events-none absolute left-0 top-0 z-30 flex h-[12.5%] w-[12.5%] items-center justify-center transition-transform duration-[560ms] ease-in-out" style={{transform:"translate("+((draughtsAnimation.to%8-draughtsAnimation.from%8)*800)+"%, "+((Math.floor(draughtsAnimation.to/8)-Math.floor(draughtsAnimation.from/8))*800)+"%)"}}>
+                {draughtsAnimation&&<div className="pointer-events-none absolute left-0 top-0 z-30 flex h-[12.5%] w-[12.5%] items-center justify-center transition-transform duration-[560ms] ease-in-out" style={{transform:draughtsAnimation.phase==="start"?"translate(0%, 0%)":"translate("+((draughtsAnimation.to%8-draughtsAnimation.from%8)*800)+"%, "+((Math.floor(draughtsAnimation.to/8)-Math.floor(draughtsAnimation.from/8))*800)+"%)",transition:"transform 950ms cubic-bezier(0.22, 0.8, 0.25, 1)"}}>
                   <span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-xl "+(draughtsSide(draughtsAnimation.piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"♛":""}</span>
                 </div>}
               </div>
