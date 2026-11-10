@@ -501,9 +501,13 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       await new Promise(resolve=>window.setTimeout(resolve,1400));
       setDraughtsAnimation(null);
       setDraughtsLastMove({from:moveToAnimate.from,to:moveToAnimate.to,capture:moveToAnimate.capture});
-      if(moveToAnimate.capture!==null) { setDraughtsCaptureAt(moveToAnimate.capture); playSound("capture"); }
-       else playSound("move");
-      else setDraughtsCaptureAt(null);
+      if (moveToAnimate.capture !== null) {
+        setDraughtsCaptureAt(moveToAnimate.capture);
+        playSound("capture");
+      } else {
+        playSound("move");
+        setDraughtsCaptureAt(null);
+      }
     };
     await animateMove(move,board[move.from]!);
     let applied=applyDraughtsMove(board,move);
