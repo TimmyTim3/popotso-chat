@@ -1,4 +1,4 @@
-type SoundName = "tap" | "send" | "receive" | "delivered" | "dice" | "tick" | "move" | "ladder" | "snake" | "win" | "capture" | "drop" | "correct" | "wrong" | "game";
+type SoundName = "tap" | "send" | "receive" | "delivered" | "dice" | "tick" | "move" | "ladder" | "snake" | "win" | "capture" | "drop" | "correct" | "wrong" | "game" | "call" | "reminder";
 
 let audioContext: AudioContext | null = null;
 let soundEnabled = true;
@@ -48,6 +48,8 @@ export const playSound = (name: SoundName) => {
     correct: [[660,.09,"sine",.035],[880,.16,"sine",.035]],
     wrong: [[260,.2,"triangle",.035],[190,.2,"triangle",.025]],
     game: [[440,.08,"sine",.025],[660,.12,"sine",.025]],
+    call: [[440,.18,"sine",.035],[554,.18,"sine",.035],[440,.18,"sine",.035]],
+    reminder: [[740,.1,"sine",.03],[880,.16,"sine",.03]],
   };
   notes[name].forEach(([frequency, duration, type, volume], index) => tone(ctx, frequency, duration, now + index * 0.105, type, volume));
 };
