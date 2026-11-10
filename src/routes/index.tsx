@@ -858,7 +858,7 @@ function ChatRoom({ session }: { session: Session }) {
               dataBytes: summary.dataBytes,
               startedAt: new Date().toISOString(),
             };
-            void insert({ kind: "text", body: `[[POPOSO_CALL]]${JSON.stringify(callRecord)}` });
+            if (summary.initiatedByMe) void insert({ kind: "text", body: `[[POPOSO_CALL]]${JSON.stringify(callRecord)}` });
             setInCall(false);
             setIncomingCall(null);
           }}
