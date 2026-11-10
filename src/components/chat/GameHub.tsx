@@ -77,24 +77,35 @@ const initialState = (game: GameType, first: string): GameState => ({
   question: 0, questionPool: [...QUIZ.keys()].sort(() => Math.random() - 0.5), streak: 0, winner: null,
   snakeDirection: "right", snakeNextDirection: "right",
 });
-const winnerTtt = (b: string[]) => {
-  const lines: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-  for (const [a, c, d] of lines) {
-    const mark = b[a];
-    if (mark && mark === b[c] && mark === b[d]) return mark;
-  }
-  return b.every(Boolean) ? "draw" : null;
+const TTT_LINES: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const findTttWinningLine = (board: string[]) => TTT_LINES.find(([a,c,d]) => Boolean(board[a]) && board[a] === board[c] && board[a] === board[d]) ?? null;
+const winnerTtt = (board: string[]) => {
+  const line = findTttWinningLine(board);
+  return line ? board[line[0]]! : board.every(Boolean) ? "draw" : null;
 };
-const winnerConnect = (b: string[][]) => {
-  for (let r=0;r<6;r++) for(let c=0;c<7;c++) {
-    const p=b[r]?.[c]; if(!p) continue;
-    const directions: [number, number][] = [[0,1],[1,0],[1,1],[1,-1]];
-    for(const [dr,dc] of directions) {
-      let ok=true; for(let k=1;k<4;k++){const rr=r+dr*k,cc=c+dc*k;if(rr<0||rr>=6||cc<0||cc>=7||b[rr]?.[cc]!==p){ok=false;break;}}
-      if(ok) return p;
+const findConnectWinningLine = (board: string[][]) => {
+  for (let row=0; row<6; row++) for (let col=0; col<7; col++) {
+    const mark=board[row]?.[col]; if(!mark) continue;
+    for(const [dr,dc] of [[0,1],[1,0],[1,1],[1,-1]] as [number,number][]) {
+      const cells: [number,number][] = [[row,col]];
+      for(let step=1;step<4;step++) {
+        const rr=row+dr*step, cc=col+dc*step;
+        if(rr<0||rr>=6||cc<0||cc>=7||board[rr]?.[cc]!==mark) break;
+        cells.push([rr,cc]);
+      }
+      if(cells.length===4) return cells;
     }
   }
-  return b.every(row=>row.every(Boolean)) ? "draw" : null;
+  return null;
+};
+const winnerConnect = (board: string[][]) => {
+  const line=findConnectWinningLine(board);
+  return line ? board[line[0]![0]]![line[0]![1]]! : board.every(row=>row.every(Boolean)) ? "draw" : null;
+};
+const dropConnectDisc = (board: string[][], column: number, mark: string) => {
+  const copy=board.map((row) => [...row]);
+  for(let row=5;row>=0;row--) if(!copy[row]?.[column]) { copy[row]![column]=mark; return copy; }
+  return null;
 };
 
 export function GameHub({ userId, partnerName, onClose }: { userId: string; partnerName: string; onClose: () => void }) {
