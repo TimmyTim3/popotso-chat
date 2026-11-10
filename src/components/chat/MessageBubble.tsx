@@ -15,6 +15,8 @@ interface MessageBubbleProps {
   message: ChatMessage;
   outgoing: boolean;
   onSelectMedia?: (url: string, kind: "image" | "video") => void;
+  mediaGroup?: ChatMessage[];
+  onSelectMediaGroup?: (items: ChatMessage[]) => void;
   onReact?: (emoji: string) => void;
   onRetry?: () => void;
   onEdit?: (message: ChatMessage) => void;
@@ -33,6 +35,8 @@ export function MessageBubble({
   message,
   outgoing,
   onSelectMedia,
+  mediaGroup,
+  onSelectMediaGroup,
   onReact,
   onRetry,
   onEdit,
@@ -368,29 +372,30 @@ export function MessageBubble({
         )}
 
         {/* Image Attachment */}
-        {message.kind === "image" && (
-          <div
-            className="relative cursor-pointer overflow-hidden rounded-[18px] bg-secondary/50"
-            onClick={() => url && !uploading && onSelectMedia?.(url, "image")}
-          >
-            <img
-              src={url}
-              alt={message.attachment_name ?? "Photo"}
-              className="max-h-[380px] w-auto max-w-full object-cover"
-              loading="lazy"
-            />
-            {uploading && (
-              <ProgressRing
-                progress={message.progress ?? 0}
-                onCancel={
-                  onCancelUpload
-                    ? () => onCancelUpload(message.client_id || message.id)
-                    : undefined
-                }
-              />
-            )}
-          </div>
-        )}
+        {message.kind === "image" && (() => {
+          const photos = mediaGroup?.length ? mediaGroup : [message];
+          const visible = photos.slice(0, 4);
+          const openPhotos = () => {
+            if (onSelectMediaGroup) onSelectMediaGroup(photos);
+            else if (url) onSelectMedia?.(url, "image");
+          };
+          return (
+            <div className={`relative grid cursor-pointer overflow-hidden rounded-[18px] bg-secondary/50 ${visible.length === 1 ? "grid-cols-1" : "grid-cols-2"} ${visible.length === 3 ? "grid-rows-2" : ""}`} onClick={() => !uploading && openPhotos()} role="button" tabIndex={0} aria-label={`Open ${photos.length} shared photos`} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openPhotos(); } }}>
+              {visible.map((photo, index) => {
+                const photoUrl = photo.localUrl ?? photo.attachment_url ?? "";
+                const featuredThree = visible.length === 3 && index === 0;
+                const showMore = index === 3 && photos.length > 4;
+                return (
+                  <div key={photo.id} className={`relative min-w-0 overflow-hidden ${visible.length === 1 ? "max-h-[380px]" : "aspect-square"} ${featuredThree ? "row-span-2 aspect-auto" : ""}`}>
+                    <img src={photoUrl} alt={photo.attachment_name ?? "Shared photo"} loading="lazy" className="h-full w-full object-cover" />
+                    {showMore && <div className="absolute inset-0 flex items-center justify-center bg-black/55 text-2xl font-bold text-white backdrop-blur-[2px]">+{photos.length - 4}</div>}
+                  </div>
+                );
+              })}
+              {uploading && <ProgressRing progress={message.progress ?? 0} onCancel={onCancelUpload ? () => onCancelUpload(message.client_id || message.id) : undefined} />}
+            </div>
+          );
+        })()}
 
         {/* Video Attachment */}
         {message.kind === "video" && (
