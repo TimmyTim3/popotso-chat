@@ -159,7 +159,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         const bodyToCheck=ate?board.body:board.body.slice(0,-1);
         const hit=nextHead[0]!<0||nextHead[0]!>=16||nextHead[1]!<0||nextHead[1]!>=16||bodyToCheck.some(([x,y])=>x===nextHead[0]&&y===nextHead[1]);
         if(hit)return {...previous,board:{...board,over:true},winner:"Game over!"};
-        const body=[nextHead,...board.body.slice(0,ate?undefined:-1)];
+        const body=[nextHead,...(ate?board.body:board.body.slice(0,-1))];
         let food=board.food,score=board.score;
         if(ate){
           score+=10;
