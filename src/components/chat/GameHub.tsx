@@ -512,6 +512,29 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                 {current?.winnerLine?.length===4 && <svg viewBox="0 0 700 600" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><line x1={(current.winnerLine[0]!%7)*100+50} y1={Math.floor(current.winnerLine[0]!/7)*100+50} x2={(current.winnerLine[3]!%7)*100+50} y2={Math.floor(current.winnerLine[3]!/7)*100+50} stroke="white" strokeWidth="13" strokeLinecap="round"/></svg>}
               </div>
             </div>}
+            {game==="draughts" && <div className="mx-auto max-w-[360px]">
+              <div className="mb-3 flex items-center justify-between text-xs">
+                <span className="font-semibold">🔴 Red: {(current?.board as string[] ?? []).filter(piece=>draughtsSide(piece)==="r").length}</span>
+                <span className="text-muted-foreground">{solo?(current?.turnId==="ai"?"Computer's turn":"Your turn"):(isMyTurn?"Your turn":"Opponent's turn")}</span>
+                <span className="font-semibold">⚫ Black: {(current?.board as string[] ?? []).filter(piece=>draughtsSide(piece)==="b").length}</span>
+              </div>
+              <div className="grid grid-cols-8 overflow-hidden rounded-xl border-4 border-amber-950 shadow-lg">
+                {(current?.board as string[] ?? []).map((piece:string,index:number)=>{
+                  const row=Math.floor(index/8),col=index%8;
+                  const side=solo?"r":(active?.challenger_id===userId?"r":"b");
+                  const legal=getDraughtsLegalMoves((current?.board as string[]) ?? [],side,current?.forcedPiece??null);
+                  const selectable=legal.some(move=>move.from===index);
+                  const target=selectedDraughtsPiece!==null&&legal.some(move=>move.from===selectedDraughtsPiece&&move.to===index);
+                  const selected=selectedDraughtsPiece===index;
+                  return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
+                    {piece&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
+                    {selectable&&!piece&&<span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-emerald-300"/>}
+                  </button>;
+                })}
+              </div>
+              <p className="mt-3 text-center text-xs text-muted-foreground">{current?.forcedPiece!==null&&current?.forcedPiece!==undefined?"You must continue jumping with the selected piece.":"Tap one of your pieces, then tap a highlighted square to move."} Kings can move and capture backwards.</p>
+              <button onClick={()=>setSelectedDraughtsPiece(null)} className="mt-2 w-full rounded-xl border border-border p-2 text-xs font-semibold">Clear selection</button>
+            </div>}
             {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
             {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><p className="my-4 text-2xl font-black tracking-[0.3em]">{current?.scrambled??"HNSIUNES"}</p><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button disabled={waiting || !isMyTurn || Boolean(current?.winner)} onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
             {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">{solo ? `Streak: ${current?.streak??0} 🔥` : `Score: ${(current?.scores?.[userId]??0)}–${(current?.scores?.[active?.opponent_id??""]??0)}`}</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
