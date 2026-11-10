@@ -191,7 +191,7 @@ export function MessageBubble({
   return (
     <div
       id={`message-${message.id}`}
-      className={`group relative mb-2 flex flex-col animate-[message-in_180ms_ease-out] motion-reduce:animate-none transition-all duration-200 ${
+      className={`group relative mb-2 flex flex-col animate-[popotso-message-in_180ms_ease-out] motion-reduce:animate-none transition-all duration-200 ${
         outgoing ? "items-end" : "items-start"
       }`}
     >
