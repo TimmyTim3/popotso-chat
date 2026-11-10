@@ -412,6 +412,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if (!current || current.board[index] || winnerTtt(current.board) || !isMyTurn || thinking || busy || waiting) return;
     const mark = active ? playerMark : "X";
     const board = [...current.board]; board[index] = mark;
+    playSound("tap");
     let winner = winnerTtt(board);
     let winnerLine = findTttWinningLine(board) ?? undefined;
     let next = { ...current, board, turnId: active ? (userId === active.challenger_id ? (active.opponent_id ?? userId) : active.challenger_id) : "ai" };
@@ -449,7 +450,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
 
     // Make the player's disc visibly fall before the computer begins its three-second thinking pause.
     setSoloState(next);
-    if (winner) return;
+    playSound("drop");
+    if (winner) { playSound("win"); return; }
     setThinking(true);
     await new Promise(resolve => window.setTimeout(resolve, 3000));
 
@@ -468,6 +470,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         const aiLine=findConnectWinningLine(aiBoard)?.map(([row,col])=>row*7+col) ?? undefined;
         next={...next,board:aiBoard,turnId:userId,winner:aiWinner??null,winnerLine:aiLine};
         setSoloState(next);
+        playSound("drop");
+        if(aiWinner) playSound("win");
         await new Promise(resolve=>window.setTimeout(resolve,750));
       }
     }
@@ -496,7 +500,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       await new Promise(resolve=>window.setTimeout(resolve,1400));
       setDraughtsAnimation(null);
       setDraughtsLastMove({from:moveToAnimate.from,to:moveToAnimate.to,capture:moveToAnimate.capture});
-      if(moveToAnimate.capture!==null) setDraughtsCaptureAt(moveToAnimate.capture);
+      if(moveToAnimate.capture!==null) { setDraughtsCaptureAt(moveToAnimate.capture); playSound("capture"); }
+       else playSound("move");
       else setDraughtsCaptureAt(null);
     };
     await animateMove(move,board[move.from]!);
@@ -664,6 +669,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
 
   const chooseRps = async (choice: string) => {
     if (!current || current.choices?.[userId] || (active && !isMyTurn) || rpsCountdown) return;
+    playSound("tap");
     setRpsCountdown("Rock…");
     await new Promise((resolve) => window.setTimeout(resolve, 330));
     setRpsCountdown("Paper…");
@@ -692,10 +698,12 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const submitWord = async () => {
     if(!current || current.winner || (active && !isMyTurn)) return;
     if(answer.trim().toUpperCase()!==current.word) {
+      playSound("wrong");
       setNotice("Not quite — try again!");
       if(active?.opponent_id) await updateGame({...current,turnId:userId===active.challenger_id?active.opponent_id:active.challenger_id},null);
       return;
     }
+    playSound("correct");
     const next={...current,winner:"Correct! 🎉"};
     if(active) await updateGame(next,userId); else setSoloState(next);
     setAnswer("");
@@ -704,6 +712,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(!current || current.answers?.[userId]!==undefined || (active && !isMyTurn)) return;
     const activeQuestion=QUIZ[(current.questionPool?.[current.question] ?? current.question) % QUIZ.length]!;
     setQuizFeedback(index===activeQuestion.correct);
+    playSound(index===activeQuestion.correct?"correct":"wrong");
     const pool=current.questionPool?.length ? current.questionPool : [...QUIZ.keys()];
     const q=QUIZ[pool[current.question % pool.length] ?? 0]!;
     const correct=index===q.correct;
