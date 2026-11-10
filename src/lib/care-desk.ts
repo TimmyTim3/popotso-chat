@@ -133,6 +133,8 @@ export async function uploadRaw(
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.setRequestHeader("apikey", import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"] as string);
     xhr.setRequestHeader("cache-control", "3600");
+    // Retrying the same client message reuses its storage path safely.
+    xhr.setRequestHeader("x-upsert", "true");
     if (contentType) xhr.setRequestHeader("content-type", contentType);
 
     xhr.upload.onprogress = (event) => {
