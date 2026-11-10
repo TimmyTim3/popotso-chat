@@ -176,6 +176,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [thinking, setThinking] = useState(false);
   const [rpsCountdown, setRpsCountdown] = useState("");
   const [selectedDraughtsPiece, setSelectedDraughtsPiece] = useState<number|null>(null);
+  const [ladderDiceRolling, setLadderDiceRolling] = useState(false);
+  const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
+  const [ladderMessage, setLadderMessage] = useState("");
+  const snakeTouchStart = useRef<{x:number;y:number}|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
 
   const setSnakeDirection = (direction: "up" | "down" | "left" | "right") => {
@@ -336,6 +340,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const move=legal.find(candidate=>candidate.from===selectedDraughtsPiece&&candidate.to===square);
     if(!move){setSelectedDraughtsPiece(null);return;}
     let applied=applyDraughtsMove(board,move);
+    if(move.capture!==null)setNotice(`${side==="r"?"Red":"Black"} captured a ${draughtsSide(board[move.capture]!)==="r"?"red":"black"} piece!`);
+    else setNotice("Piece moved.");
     let nextBoard=applied.board;
     let nextForced=applied.forcedPiece;
     let nextSide=nextForced!==null?side:(side==="r"?"b":"r");
@@ -375,22 +381,49 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const rollSnakesLadders = async () => {
     if(!current || selected!=="snakes-ladders" || current.winner || busy) return;
     if(active && current.turnId!==userId) return;
-    setBusy(true);
-    const dice=1+Math.floor(Math.random()*6);
-    const positions=advanceLadderBoard((current.board as any).positions ?? {},userId,dice);
-    const opponentId=active ? (userId===active.challenger_id ? active.opponent_id ?? userId : active.challenger_id) : "ai";
-    let winner=positions[userId]===100 ? "You win!" : null;
-    let next={...current,board:{positions,dice},turnId:opponentId,winner};
-    if(!active && !winner){
-      await new Promise((resolve)=>window.setTimeout(resolve,650));
-      const aiDice=1+Math.floor(Math.random()*6);
-      const aiPositions=advanceLadderBoard(positions,"ai",aiDice);
-      winner=aiPositions.ai===100 ? "Computer wins!" : null;
-      next={...next,board:{positions:aiPositions,dice:aiDice},turnId:userId,winner};
-    }
-    if(active) await updateGame(next,winner ? userId : undefined);
-    else setSoloState(next);
-    setBusy(false);
+    setBusy(true); setLadderMessage("");
+    const animateTurn = async (positions:Record<string,number>, player:string) => {
+      const start=positions[player]??0;
+      const dice=1+Math.floor(Math.random()*6);
+      setLadderDiceRolling(true);
+      await new Promise(resolve=>window.setTimeout(resolve,850));
+      setLadderDiceRolling(false);
+      const landing=start+dice;
+      const destination=landing>100?start:(SNAKES_LADDERS[landing]??landing);
+      const nextPositions={...positions,[player]:start};
+      setLadderVisualPositions({...nextPositions});
+      for(let square=start+1;square<=Math.min(landing,100)&&landing<=100;square++){
+        nextPositions[player]=square; setLadderVisualPositions({...nextPositions});
+        await new Promise(resolve=>window.setTimeout(resolve,145));
+      }
+      if(landing>100) setLadderMessage("You need an exact roll to reach 100.");
+      else if(destination!==landing){
+        setLadderMessage(destination>landing?"Ladder! Climbing up! 🪜":"Snake! Sliding down! 🐍");
+        await new Promise(resolve=>window.setTimeout(resolve,250));
+        const step=destination>landing?1:-1;
+        for(let square=landing+step;step>0?square<=destination:square>=destination;square+=step){
+          nextPositions[player]=square; setLadderVisualPositions({...nextPositions});
+          await new Promise(resolve=>window.setTimeout(resolve,55));
+        }
+      }
+      nextPositions[player]=destination;
+      return {positions:nextPositions,dice,destination,landing};
+    };
+    try {
+      const initial=(current.board as any).positions??{};
+      const first=await animateTurn(initial,userId);
+      let positions=first.positions;
+      let winner=positions[userId]===100?"You win!":null;
+      const opponentId=active?(userId===active.challenger_id?active.opponent_id??userId:active.challenger_id):"ai";
+      let next={...current,board:{positions,dice:first.dice},turnId:opponentId,winner};
+      if(!active&&!winner){
+        await new Promise(resolve=>window.setTimeout(resolve,650));
+        const ai=await animateTurn(positions,"ai"); positions=ai.positions;
+        winner=positions.ai===100?"Computer wins!":null;
+        next={...next,board:{positions,dice:ai.dice},turnId:userId,winner};
+      }
+      if(active) await updateGame(next,winner?userId:undefined); else setSoloState(next);
+    } finally { setBusy(false); }
   };
 
   const chooseRps = async (choice: string) => {
@@ -503,12 +536,12 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {rpsCountdown && <p className="my-3 text-center text-xl font-bold text-primary">{rpsCountdown}</p>}
             {game==="rock-paper-scissors" && current?.choices && Object.keys(current.choices).length > 0 && <div className="my-4 flex items-center justify-center gap-5 rounded-2xl bg-secondary/70 p-4"><div className="text-center"><p className="text-xs text-muted-foreground">You</p><p className="text-4xl">{({rock:"✊",paper:"✋",scissors:"✌️"} as Record<string,string>)[current.choices[userId] ?? ""] ?? "…"}</p></div><span className="text-sm font-bold text-muted-foreground">VS</span><div className="text-center"><p className="text-xs text-muted-foreground">{solo ? "Computer" : partnerName}</p><p className="text-4xl">{({rock:"✊",paper:"✋",scissors:"✌️"} as Record<string,string>)[current.choices[solo ? "ai" : (active?.challenger_id === userId ? active?.opponent_id ?? "" : active?.challenger_id ?? "")] ?? ""] ?? "…"}</p></div></div>}
             {game==="tic-tac-toe" && <div className="relative mx-auto max-w-[300px]">
-              <div className="grid grid-cols-3 gap-2">{(current?.board??[]).map((v:string,i:number)=><button key={i} disabled={!isMyTurn||thinking||Boolean(v)||Boolean(current?.winner)||waiting} onClick={()=>void playTtt(i)} className={`aspect-square rounded-2xl border border-border bg-card text-4xl font-bold ${current?.winnerLine?.includes(i)?"bg-primary/20 ring-2 ring-primary":""}`}>{v}</button>)}</div>
+              <div className="grid grid-cols-3 gap-2">{(current?.board??[]).map((v:string,i:number)=><button key={i} disabled={!isMyTurn||thinking||Boolean(v)||Boolean(current?.winner)||waiting} onClick={()=>void playTtt(i)} className={`aspect-square rounded-2xl border border-border bg-card text-4xl font-bold transition-all duration-200 active:scale-95 ${current?.winnerLine?.includes(i)?"bg-primary/20 ring-2 ring-primary animate-pulse":""}`}>{v}</button>)}</div>
               {current?.winnerLine?.length===3 && <svg viewBox="0 0 300 300" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><line x1={(current.winnerLine[0]!%3)*100+50} y1={Math.floor(current.winnerLine[0]!/3)*100+50} x2={(current.winnerLine[2]!%3)*100+50} y2={Math.floor(current.winnerLine[2]!/3)*100+50} stroke="currentColor" strokeWidth="8" strokeLinecap="round" className="text-primary"/></svg>}
             </div>}
             {game==="connect-four" && <div className="mx-auto max-w-[340px]">
               <div className="mb-1 grid grid-cols-7 gap-1">{Array.from({length:7},(_,col)=><button key={col} type="button" onClick={()=>void playConnect(col)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting||Boolean(current?.board?.[0]?.[col])} aria-label={`Drop disc in column ${col+1}`} className="rounded-t-lg bg-blue-700 py-2 text-sm font-bold text-white disabled:opacity-40">↓</button>)}</div>
-              <div className="relative grid grid-cols-7 gap-1 rounded-b-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><div key={r+"-"+c} className={`aspect-square rounded-full border border-blue-800 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"} ${current?.winnerLine?.includes(r*7+c)?"ring-4 ring-white shadow-[0_0_0_3px_rgba(255,255,255,0.45)]":""}`}/>))}
+              <div className="relative grid grid-cols-7 gap-1 rounded-b-2xl bg-blue-600 p-2">{(current?.board??[]).flatMap((row:string[],r:number)=>row.map((v:string,c:number)=><div key={r+"-"+c} className={`aspect-square rounded-full border border-blue-800 transition-all duration-300 ${v==="X"?"bg-red-400":v==="O"?"bg-yellow-300":"bg-white"} ${v?"animate-[bounce-in_250ms_ease-out]":""} ${current?.winnerLine?.includes(r*7+c)?"ring-4 ring-white shadow-[0_0_0_3px_rgba(255,255,255,0.45)]":""}`}/>))}
                 {current?.winnerLine?.length===4 && <svg viewBox="0 0 700 600" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><line x1={(current.winnerLine[0]!%7)*100+50} y1={Math.floor(current.winnerLine[0]!/7)*100+50} x2={(current.winnerLine[3]!%7)*100+50} y2={Math.floor(current.winnerLine[3]!/7)*100+50} stroke="white" strokeWidth="13" strokeLinecap="round"/></svg>}
               </div>
             </div>}
@@ -527,7 +560,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   const target=selectedDraughtsPiece!==null&&legal.some(move=>move.from===selectedDraughtsPiece&&move.to===index);
                   const selected=selectedDraughtsPiece===index;
                   return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
-                    {piece&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
+                    {piece&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md transition-all duration-200 ease-out "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
                     {selectable&&!piece&&<span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-emerald-300"/>}
                   </button>;
                 })}
@@ -540,7 +573,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">{solo ? `Streak: ${current?.streak??0} 🔥` : `Score: ${(current?.scores?.[userId]??0)}–${(current?.scores?.[active?.opponent_id??""]??0)}`}</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
             {game==="snake" && <div className="mx-auto max-w-[340px]">
               <div className="mb-3 flex items-center justify-between"><span className="text-sm font-semibold">Score: {(current?.board as any)?.score ?? 0}</span><span className="text-xs text-muted-foreground">Use arrows or swipe buttons</span></div>
-              <div className="grid gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1",gridTemplateColumns:"repeat(16,minmax(0,1fr))"}}>
+              <div onTouchStart={event=>{const t=event.touches[0];if(t)snakeTouchStart.current={x:t.clientX,y:t.clientY};}} onTouchEnd={event=>{const start=snakeTouchStart.current;const t=event.changedTouches[0];snakeTouchStart.current=null;if(!start||!t)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.max(Math.abs(dx),Math.abs(dy))<22)return;if(Math.abs(dx)>Math.abs(dy))setSnakeDirection(dx>0?"right":"left");else setSnakeDirection(dy>0?"down":"up");}} onTouchMove={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} className="grid gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1",gridTemplateColumns:"repeat(16,minmax(0,1fr))",touchAction:"none",userSelect:"none"}}>
                 {Array.from({length:256},(_,index)=>{
                   const x=index%16,y=Math.floor(index/16);
                   const body=(current?.board as any)?.body ?? [];
@@ -548,28 +581,28 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   const isBody=body.some((part:number[],i:number)=>i>0&&part[0]===x&&part[1]===y);
                   const food=(current?.board as any)?.food ?? [];
                   const isFood=food[0]===x&&food[1]===y;
-                  return <div key={index} className={`aspect-square rounded-[3px] ${isHead?"bg-emerald-900":isBody?"bg-emerald-600":isFood?"rounded-full bg-red-500":"bg-emerald-50"}`}/>;
+                  return <div key={index} className={`aspect-square rounded-[3px] transition-colors duration-100 ${isHead?"bg-emerald-900 shadow-inner":isBody?"bg-emerald-600":isFood?"rounded-full bg-red-500 animate-pulse":"bg-emerald-50"}`}/>;
                 })}
               </div>
-              <div className="mx-auto mt-4 grid w-40 grid-cols-3 gap-2">
+              <div className="mx-auto mt-4 grid w-56 grid-cols-3 gap-3">
                 <span/>
-                <button onClick={()=>setSnakeDirection("up")} className="rounded-xl border border-border bg-secondary p-3 text-xl">↑</button>
+                <button aria-label="Move up" onClick={()=>setSnakeDirection("up")} className="min-h-16 rounded-2xl border border-border bg-secondary text-3xl shadow-sm active:scale-95">↑</button>
                 <span/>
-                <button onClick={()=>setSnakeDirection("left")} className="rounded-xl border border-border bg-secondary p-3 text-xl">←</button>
-                <button onClick={()=>setSnakeDirection("down")} className="rounded-xl border border-border bg-secondary p-3 text-xl">↓</button>
-                <button onClick={()=>setSnakeDirection("right")} className="rounded-xl border border-border bg-secondary p-3 text-xl">→</button>
+                <button aria-label="Move left" onClick={()=>setSnakeDirection("left")} className="min-h-16 rounded-2xl border border-border bg-secondary text-3xl shadow-sm active:scale-95">←</button>
+                <button aria-label="Move down" onClick={()=>setSnakeDirection("down")} className="min-h-16 rounded-2xl border border-border bg-secondary text-3xl shadow-sm active:scale-95">↓</button>
+                <button aria-label="Move right" onClick={()=>setSnakeDirection("right")} className="min-h-16 rounded-2xl border border-border bg-secondary text-3xl shadow-sm active:scale-95">→</button>
               </div>
               {current?.winner && <button onClick={()=>void reset()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Play again</button>}
             </div>}
             {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
-              <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
-              <p className="mb-2 text-center text-sm text-muted-foreground">{current?.board?.dice ? `Last roll: ${current.board.dice}` : "Roll to begin"} · {active ? (isMyTurn?"Your turn":"Opponent's turn") : "You vs Computer"}</p>
+              <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
+              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling?["⚀","⚁","⚂","⚃","⚄","⚅"][Math.floor(Date.now()/90)%6]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
               <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border border-border bg-secondary p-1">
                 {Array.from({length:100},(_,index)=>{
                   const row=Math.floor(index/10),col=index%10,rowFromBottom=9-row;
                   const offset=rowFromBottom%2===0?col:9-col;
                   const number=rowFromBottom*10+offset+1;
-                  const positions=(current?.board as any)?.positions ?? {};
+                  const positions=ladderVisualPositions??(current?.board as any)?.positions??{};
                   const userHere=positions[userId]===number;
                   const opponentKey=active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai";
                   const opponentHere=opponentKey && positions[opponentKey]===number;
@@ -577,7 +610,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   return <div key={number} className={`relative flex aspect-square flex-col items-center justify-center rounded-sm text-[9px] font-semibold ${jump?(jump>number?"bg-emerald-200 text-emerald-900":"bg-rose-200 text-rose-900"):"bg-card"}`}>
                     <span>{number}</span>
                     {jump && <span className="text-[7px]">{jump>number?"↗":"↘"}{jump}</span>}
-                    <div className="absolute bottom-0 flex gap-0.5">{userHere&&<span className="size-2 rounded-full bg-blue-600"/>}{opponentHere&&<span className="size-2 rounded-full bg-amber-500"/>}</div>
+                    <div className="absolute bottom-0 flex gap-0.5">{userHere&&<span className="size-2 rounded-full bg-blue-600 ring-2 ring-white transition-all duration-100"/>}{opponentHere&&<span className="size-2 rounded-full bg-amber-500 ring-2 ring-white transition-all duration-100"/>}</div>
                   </div>;
                 })}
               </div>
