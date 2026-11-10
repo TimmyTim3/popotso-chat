@@ -31,7 +31,7 @@ interface VoiceCallModalProps {
     sdp: RTCSessionDescriptionInit;
     isVideo?: boolean;
   } | null;
-  onClose: (summary: { connected: boolean; durationSeconds: number; dataBytes: number; video: boolean; outcome: 'completed' | 'missed' | 'no-answer' | 'declined' }) => void;
+  onClose: (summary: { connected: boolean; durationSeconds: number; dataBytes: number; video: boolean; outcome: 'completed' | 'missed' | 'no-answer' | 'declined'; initiatedByMe: boolean }) => void;
 }
 
 type CallStatus = "connecting" | "ringing" | "incoming" | "connected" | "ended";
@@ -189,7 +189,7 @@ export function VoiceCallModal({
         const outcome = connectedRef.current ? "completed" : incomingCall ? "declined" : "no-answer";
         if (!closeOnceRef.current) {
           closeOnceRef.current = true;
-          onClose({ connected: connectedRef.current, durationSeconds, dataBytes, video: isVideo, outcome });
+          onClose({ connected: connectedRef.current, durationSeconds, dataBytes, video: isVideo, outcome, initiatedByMe: isCaller });
         }
       };
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
