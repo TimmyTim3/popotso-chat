@@ -212,7 +212,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     }).eq("id", active.id).select("*").single();
     if (!error) { setActive(data as Challenge); void load(); }
   };
-  const startSolo = (game: GameType) => { setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
+  const startSolo = (game: GameType) => { snakeDirectionRef.current="right"; setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
   const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
@@ -405,6 +405,51 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
             {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><p className="my-4 text-2xl font-black tracking-[0.3em]">{current?.scrambled??"HNSIUNES"}</p><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button disabled={waiting || Boolean(active && userId === active.challenger_id) || Boolean(current?.winner)} onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
             {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">Streak: {current?.streak??0} 🔥</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
+            {game==="snake" && <div className="mx-auto max-w-[340px]">
+              <div className="mb-3 flex items-center justify-between"><span className="text-sm font-semibold">Score: {(current?.board as any)?.score ?? 0}</span><span className="text-xs text-muted-foreground">Use arrows or swipe buttons</span></div>
+              <div className="grid grid-cols-16 gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1"}}>
+                {Array.from({length:256},(_,index)=>{
+                  const x=index%16,y=Math.floor(index/16);
+                  const body=(current?.board as any)?.body ?? [];
+                  const isHead=body[0]?.[0]===x&&body[0]?.[1]===y;
+                  const isBody=body.some((part:number[],i:number)=>i>0&&part[0]===x&&part[1]===y);
+                  const food=(current?.board as any)?.food ?? [];
+                  const isFood=food[0]===x&&food[1]===y;
+                  return <div key={index} className={`aspect-square rounded-[3px] ${isHead?"bg-emerald-900":isBody?"bg-emerald-600":isFood?"rounded-full bg-red-500":"bg-emerald-50"}`}/>;
+                })}
+              </div>
+              <div className="mx-auto mt-4 grid w-40 grid-cols-3 gap-2">
+                <span/>
+                <button onClick={()=>setSnakeDirection("up")} className="rounded-xl border border-border bg-secondary p-3 text-xl">↑</button>
+                <span/>
+                <button onClick={()=>setSnakeDirection("left")} className="rounded-xl border border-border bg-secondary p-3 text-xl">←</button>
+                <button onClick={()=>setSnakeDirection("down")} className="rounded-xl border border-border bg-secondary p-3 text-xl">↓</button>
+                <button onClick={()=>setSnakeDirection("right")} className="rounded-xl border border-border bg-secondary p-3 text-xl">→</button>
+              </div>
+              {current?.winner && <button onClick={()=>void reset()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Play again</button>}
+            </div>}
+            {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
+              <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
+              <p className="mb-2 text-center text-sm text-muted-foreground">{current?.board?.dice ? `Last roll: ${current.board.dice}` : "Roll to begin"} · {active ? (isMyTurn?"Your turn":"Opponent's turn") : "You vs Computer"}</p>
+              <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border border-border bg-secondary p-1">
+                {Array.from({length:100},(_,index)=>{
+                  const row=Math.floor(index/10),col=index%10,rowFromBottom=9-row;
+                  const offset=rowFromBottom%2===0?col:9-col;
+                  const number=rowFromBottom*10+offset+1;
+                  const positions=(current?.board as any)?.positions ?? {};
+                  const userHere=positions[userId]===number;
+                  const opponentKey=active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai";
+                  const opponentHere=opponentKey && positions[opponentKey]===number;
+                  const jump=SNAKES_LADDERS[number];
+                  return <div key={number} className={`relative flex aspect-square flex-col items-center justify-center rounded-sm text-[9px] font-semibold ${jump?(jump>number?"bg-emerald-200 text-emerald-900":"bg-rose-200 text-rose-900"):"bg-card"}`}>
+                    <span>{number}</span>
+                    {jump && <span className="text-[7px]">{jump>number?"↗":"↘"}{jump}</span>}
+                    <div className="absolute bottom-0 flex gap-0.5">{userHere&&<span className="size-2 rounded-full bg-blue-600"/>}{opponentHere&&<span className="size-2 rounded-full bg-amber-500"/>}</div>
+                  </div>;
+                })}
+              </div>
+              <div className="mt-2 flex justify-center gap-4 text-xs"><span>🔵 You: {(current?.board as any)?.positions?.[userId]??0}</span><span>🟠 {solo?"Computer":partnerName}: {(current?.board as any)?.positions?.[active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai"]??0}</span></div>
+            </div>}
             {current?.winner && <div className="mt-4 rounded-2xl bg-primary/10 p-4 text-center"><Trophy className="mx-auto mb-1 size-6 text-primary"/><p className="font-bold">{current.winner==="draw"?"It's a draw!":current.winner==="X"?"X wins!":current.winner==="O"?"O wins!":current.winner}</p></div>}
             {notice && <p className="mt-3 text-center text-sm text-muted-foreground">{notice}</p>}
             <div className="mt-5 flex gap-2"><button onClick={()=>void reset()} className="flex-1 rounded-xl border border-border p-3 text-sm font-semibold">Play again</button><button onClick={()=>{setSelected(null);setActive(null);setSolo(false);}} className="flex-1 rounded-xl bg-secondary p-3 text-sm font-semibold">Choose another</button></div>
