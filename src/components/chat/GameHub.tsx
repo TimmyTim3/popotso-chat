@@ -144,7 +144,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     return ()=>window.removeEventListener("keydown",onKey);
   },[selected,solo]);
   useEffect(() => {
-    if(game!=="snake" || !solo) return;
+    if(selected!=="snake" || !solo) return;
     const timer=window.setInterval(()=>{
       setSoloState((previous)=>{
         if(!previous||previous.winner)return previous;
@@ -407,7 +407,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">Streak: {current?.streak??0} 🔥</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
             {game==="snake" && <div className="mx-auto max-w-[340px]">
               <div className="mb-3 flex items-center justify-between"><span className="text-sm font-semibold">Score: {(current?.board as any)?.score ?? 0}</span><span className="text-xs text-muted-foreground">Use arrows or swipe buttons</span></div>
-              <div className="grid grid-cols-16 gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1"}}>
+              <div className="grid gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1",gridTemplateColumns:"repeat(16,minmax(0,1fr))"}}>
                 {Array.from({length:256},(_,index)=>{
                   const x=index%16,y=Math.floor(index/16);
                   const body=(current?.board as any)?.body ?? [];
