@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy, Send } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
-import { rollFairDie, shouldRollAgain } from "@/lib/snakes-ladders";
+import { rollFairDie, shouldRollAgain, resolveLadderCollision } from "@/lib/snakes-ladders";
 
 type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders" | "draughts";
 type GameState = {
@@ -159,12 +159,6 @@ const winnerConnect = (board: string[][]) => {
   return line ? board[line[0]![0]]![line[0]![1]]! : board.every(row=>row.every(Boolean)) ? "draw" : null;
 };
 const SNAKES_LADDERS: Record<number, number> = { 4:14, 9:31, 20:38, 28:84, 40:59, 63:81, 71:91, 17:7, 54:34, 62:19, 64:60, 87:24, 93:73, 95:75, 99:78 };
-const resolveLadderCollision = (positions: Record<string, number>, player: string, destination: number) => {
-  const next = { ...positions, [player]: destination };
-  const opponent = Object.keys(next).find((id) => id !== player && next[id] === destination);
-  if (opponent) next[opponent] = 0;
-  return { positions: next, kickedPlayer: opponent ?? null };
-};
 const advanceLadderBoard = (positions: Record<string, number>, player: string, dice: number) => {
   const current=positions[player] ?? 0;
   const landing=current+dice;
