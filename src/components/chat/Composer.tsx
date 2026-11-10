@@ -29,6 +29,7 @@ export function Composer({
   onCancelReply,
 }: ComposerProps) {
   const [text, setText] = useState("");
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
 
   useEffect(() => {
     if (editing) {
@@ -228,14 +229,7 @@ export function Composer({
               event.target.value = "";
             }}
           />
-          <button
-            type="button"
-            aria-label="Attach files"
-            onClick={() => fileRef.current?.click()}
-            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground shadow-sm transition-all duration-200 hover:bg-secondary/80 active:scale-90"
-          >
-            <Plus className="size-5" />
-          </button>
+          <div className="relative shrink-0"><button type="button" aria-label="Choose attachment type" aria-expanded={attachmentMenuOpen} onClick={() => setAttachmentMenuOpen((open) => !open)} className="flex size-11 items-center justify-center rounded-full bg-secondary text-secondary-foreground shadow-sm transition-all duration-200 hover:bg-secondary/80 active:scale-90"><Plus className="size-5" /></button>{attachmentMenuOpen && <div className="absolute bottom-14 left-0 z-40 grid w-44 gap-1 rounded-2xl border border-border bg-popover p-2 shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-150">{[["Photos & images","image/*"],["Videos","video/*"],["Audio files","audio/*"],["Documents","application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"],["Any file","*/*"]].map(([label,accept])=><button key={label} type="button" onClick={() => { if(fileRef.current){fileRef.current.accept=accept;fileRef.current.click();} setAttachmentMenuOpen(false); }} className="min-h-11 rounded-xl px-3 text-left text-sm transition-colors hover:bg-secondary active:scale-[.99]">{label}</button>)}</div>}</div>
 
           <div className="flex flex-1 items-end rounded-[1.35rem] border border-border bg-card px-3.5 py-1.5">
             <textarea
