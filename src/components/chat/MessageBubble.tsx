@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, Edit2, FileText, Pin, RefreshCw, SmilePlus, Star, Phone, PhoneOff, Video } from "lucide-react";
 
 import { ProgressRing } from "@/components/chat/ProgressRing";
 import { VoiceNote } from "@/components/chat/VoiceNote";
@@ -60,6 +60,8 @@ export function MessageBubble({
   const lastTap = useRef(0);
   const url = message.localUrl ?? message.attachment_url ?? "";
   const uploading = Boolean(message.pending && message.attachment_path);
+  const callRecord = (() => { if (!message.body?.startsWith("[[POPOSO_CALL]]")) return null; try { return JSON.parse(message.body.slice(15)) as { outcome: string; video: boolean; durationSeconds: number; dataBytes: number }; } catch { return null; } })();
+  const callDuration = callRecord ? `${Math.floor(callRecord.durationSeconds / 60)}:${String(callRecord.durationSeconds % 60).padStart(2, "0")}` : "";
   const mediaOnly = message.kind === "image" || message.kind === "video";
   const canReact = !message.pending && !message.failed;
   const canEdit = outgoing && message.kind === "text" && !message.pending && Boolean(onEdit);
@@ -367,7 +369,17 @@ export function MessageBubble({
         {/* Text Message */}
         {message.kind === "text" && (
           <p className="whitespace-pre-wrap break-words text-[15.5px] leading-snug tracking-[-0.01em]">
-            {message.body}
+            {callRecord ? (
+              <div className="flex min-w-52 items-center gap-3 py-1">
+                <div className={`flex size-10 shrink-0 items-center justify-center rounded-full ${callRecord.outcome === "completed" ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
+                  {callRecord.outcome === "completed" ? (callRecord.video ? <Video className="size-5" /> : <Phone className="size-5" />) : <PhoneOff className="size-5" />}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{callRecord.outcome === "completed" ? (callRecord.video ? "Video call" : "Voice call") : callRecord.outcome === "declined" ? "Call declined" : "No answer"}</div>
+                  <div className="text-xs opacity-70">{callRecord.outcome === "completed" ? `Duration ${callDuration}` : "Call did not connect"}{callRecord.dataBytes > 0 ? ` · ${(callRecord.dataBytes / (1024 * 1024)).toFixed(2)} MB` : ""}</div>
+                </div>
+              </div>
+            ) : message.body}
           </p>
         )}
 
