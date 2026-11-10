@@ -102,6 +102,13 @@ const winnerConnect = (board: string[][]) => {
   const line=findConnectWinningLine(board);
   return line ? board[line[0]![0]]![line[0]![1]]! : board.every(row=>row.every(Boolean)) ? "draw" : null;
 };
+const SNAKES_LADDERS: Record<number, number> = { 4:14, 9:31, 20:38, 28:84, 40:59, 63:81, 71:91, 17:7, 54:34, 62:19, 64:60, 87:24, 93:73, 95:75, 99:78 };
+const advanceLadderBoard = (positions: Record<string, number>, player: string, dice: number) => {
+  const current=positions[player] ?? 0;
+  const landing=current+dice;
+  const next=landing>100 ? current : (SNAKES_LADDERS[landing] ?? landing);
+  return { ...positions, [player]: next };
+};
 const dropConnectDisc = (board: string[][], column: number, mark: string) => {
   const copy=board.map((row) => [...row]);
   for(let row=5;row>=0;row--) if(!copy[row]?.[column]) { copy[row]![column]=mark; return copy; }
