@@ -473,7 +473,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece,phase:"start"});
       await new Promise<void>(resolve=>window.requestAnimationFrame(()=>resolve()));
       setDraughtsAnimation({from:moveToAnimate.from,to:moveToAnimate.to,piece,phase:"moving"});
-      await new Promise(resolve=>window.setTimeout(resolve,950));
+      await new Promise(resolve=>window.setTimeout(resolve,1400));
       setDraughtsAnimation(null);
       setDraughtsLastMove({from:moveToAnimate.from,to:moveToAnimate.to,capture:moveToAnimate.capture});
       if(moveToAnimate.capture!==null) setDraughtsCaptureAt(moveToAnimate.capture);
@@ -488,9 +488,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     let next:GameState={...current,board:nextBoard,forcedPiece:nextForced,turnId:nextSide==="r"?(active?.challenger_id??userId):(active?.opponent_id??"ai"),winner:winner?(winner==="r"?"Red wins!":"Black wins!"):null};
     setSelectedDraughtsPiece(nextForced);
     if(solo&&!winner&&nextSide==="b"){
+      // Commit the player's completed move immediately, then give the computer a real three-second pause.
+      setSoloState(next);
       setThinking(true);
-      // Give the player's completed move time to settle before the computer responds.
-      await new Promise(resolve=>window.setTimeout(resolve,1100));
+      await new Promise(resolve=>window.setTimeout(resolve,3000));
       let aiBoard=nextBoard,aiForced:number|null=null,aiWinner:string|null=null;
       let safety=0;
       do {
@@ -505,6 +506,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         aiBoard=aiApplied.board;
         aiForced=aiApplied.forcedPiece;
         aiWinner=getDraughtsWinner(aiBoard);
+        // Keep the visible board in sync after every computer step, including multi-captures.
+        setSoloState({...next,board:aiBoard,forcedPiece:aiForced,turnId:"ai",winner:aiWinner?(aiWinner==="r"?"Red wins!":"Black wins!"):null});
         safety++;
       } while(aiForced!==null&&!aiWinner&&safety<12);
       const finalWinner=aiWinner??getDraughtsWinner(aiBoard);
@@ -778,7 +781,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                     </button>;
                   })}
                 </div>
-                {draughtsAnimation&&<div className="pointer-events-none absolute left-0 top-0 z-30 flex h-[12.5%] w-[12.5%] items-center justify-center transition-transform duration-[560ms] ease-in-out" style={{transform:draughtsAnimation.phase==="start"?"translate(0%, 0%)":"translate("+((draughtsAnimation.to%8-draughtsAnimation.from%8)*800)+"%, "+((Math.floor(draughtsAnimation.to/8)-Math.floor(draughtsAnimation.from/8))*800)+"%)",transition:"transform 950ms cubic-bezier(0.22, 0.8, 0.25, 1)"}}>
+                {draughtsAnimation&&<div className="pointer-events-none absolute z-30 flex h-[12.5%] w-[12.5%] items-center justify-center" style={{left:(draughtsAnimation.from%8)*12.5+"%",top:Math.floor(draughtsAnimation.from/8)*12.5+"%",transform:draughtsAnimation.phase==="start"?"translate(0%, 0%)":"translate("+((draughtsAnimation.to%8-draughtsAnimation.from%8)*800)+"%, "+((Math.floor(draughtsAnimation.to/8)-Math.floor(draughtsAnimation.from/8))*800)+"%)",transition:"transform 1400ms cubic-bezier(0.22, 0.8, 0.25, 1)"}}>
                   <span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-xl "+(draughtsSide(draughtsAnimation.piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{draughtsAnimation.piece===draughtsAnimation.piece.toUpperCase()?"♛":""}</span>
                 </div>}
               </div>
