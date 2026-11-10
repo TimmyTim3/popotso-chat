@@ -170,6 +170,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const mark = active ? playerMark : "X";
     const board = [...current.board]; board[index] = mark;
     let winner = winnerTtt(board);
+    let winnerLine = findTttWinningLine(board) ?? undefined;
     let next = { ...current, board, turnId: active ? (userId === active.challenger_id ? (active.opponent_id ?? userId) : active.challenger_id) : "ai" };
     if (!active && !winner && board.some((v:string)=>!v)) {
       setThinking(true);
@@ -179,33 +180,38 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       const ai = findMove("O") ?? findMove("X") ?? (!board[4] ? 4 : [0,2,6,8].find((i) => !board[i]) ?? board.findIndex((v:string)=>!v));
       if (ai >= 0) board[ai] = "O";
       winner = winnerTtt(board);
+      winnerLine = findTttWinningLine(board) ?? undefined;
       next = { ...next, board, turnId: userId };
       setThinking(false);
     }
-    if (winner) next = { ...next, winner };
+    if (winner) next = { ...next, winner, winnerLine };
     if (active) await updateGame(next, winner ? (winner === "draw" ? null : winner === "X" ? active.challenger_id : active.opponent_id) : undefined);
     else setSoloState(next);
   };
   const playConnect = async (col: number) => {
     if (!current || winnerConnect(current.board) || !isMyTurn) return;
-    const board = current.board.map((r:string[])=>[...r]);
-    let row = -1; for(let r=5;r>=0;r--) if(!board[r]?.[col]) { row=r; break; } if(row<0) return;
-    const mark = active ? playerMark : "X"; board[row]![col]=mark;
+    const board = dropConnectDisc(current.board, col, active ? playerMark : "X");
+    if (!board) return;
     let winner = winnerConnect(board);
+    let winnerLine = findConnectWinningLine(board) ?? undefined;
     let next = { ...current, board, turnId: active ? (userId===active.challenger_id?(active.opponent_id ?? userId):active.challenger_id) : "ai" };
     if(!active && !winner) {
       setThinking(true);
       await new Promise((resolve) => window.setTimeout(resolve, 850));
       const legal = (board[0] ?? []).map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
-      const wins = (mark:string) => legal.find((c:number) => {
-        const copy=board.map((r:string[])=>[...r]); for(let rr=5;rr>=0;rr--) if(!copy[rr]?.[c]) {copy[rr]![c]=mark;break;} return winnerConnect(copy)===mark;
+      const wins = (mark:string) => legal.find((column:number) => {
+        const trial=dropConnectDisc(board,column,mark);
+        return trial ? winnerConnect(trial)===mark : false;
       });
-      const chosen = wins("O") ?? wins("X") ?? legal.sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
-      if (chosen !== undefined) { const copy=board.map((r:string[])=>[...r]); for(let rr=5;rr>=0;rr--) if(!copy[rr]?.[chosen]) {copy[rr]![chosen]="O";break;} board.splice(0,board.length,...copy); winner=winnerConnect(board); }
+      const chosen = wins("O") ?? wins("X") ?? [...legal].sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
+      if (chosen !== undefined) {
+        const aiBoard=dropConnectDisc(board,chosen,"O");
+        if(aiBoard) { board.splice(0,board.length,...aiBoard); winner=winnerConnect(board); winnerLine=findConnectWinningLine(board) ?? undefined; }
+      }
       next={...next,board,turnId:userId};
       setThinking(false);
     }
-    if(winner) next={...next,winner};
+    if(winner) next={...next,winner,winnerLine};
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
   const chooseRps = async (choice: string) => {
@@ -236,7 +242,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     window.setTimeout(()=>setRpsCountdown(""),500);
   };
   const submitWord = async () => {
-    if(!current || (active && userId === active.challenger_id) || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
+    if(!current || Boolean(current.winner) || answer.trim().toUpperCase()!==current.word) { setNotice("Not quite — try again!"); return; }
     const next={...current,winner:"Correct! 🎉"};
     if(active) await updateGame(next,userId); else setSoloState(next);
     setAnswer("");
@@ -277,6 +283,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const reset = async () => {
     if(!game) return;
     const next=initialState(game,active?.challenger_id??userId);
+    snakeDirectionRef.current = "right";
     if(active) await updateGame(next,null); else setSoloState(next);
     setNotice("");
   };
