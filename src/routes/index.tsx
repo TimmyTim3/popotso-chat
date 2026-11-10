@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ArrowDown, Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X, Settings2 } from "lucide-react";
+import { ArrowDown, Bell, BellRing, Gamepad2, Info, LogOut, Pin, Phone, Star, Video, X, Settings2, LoaderCircle } from "lucide-react";
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/chat/AuthScreen";
@@ -72,7 +72,7 @@ function ChatIndex() {
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
-        <span className="text-sm">Loading Popotso Care Desk...</span>
+        <div className="flex flex-col items-center gap-3"><LoaderCircle className="size-7 animate-spin text-primary" /><span className="text-sm">Loading Popotso Care Desk...</span></div>
       </div>
     );
   }
@@ -741,7 +741,7 @@ function ChatRoom({ session }: { session: Session }) {
         </div>
       </header>
 
-      {showNotificationSettings && <section className="mx-3 mt-2 rounded-2xl border border-border bg-card p-3 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">Notification preferences</h2><button type="button" onClick={() => setShowNotificationSettings(false)} aria-label="Close notification settings" className="flex size-10 items-center justify-center rounded-full hover:bg-secondary"><X className="size-4"/></button></div><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Hide message previews on lock screen</span><input type="checkbox" checked={hideNotificationPreview} onChange={(event) => updateNotificationPreview(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>App sounds</span><input type="checkbox" checked={soundsEnabled} onChange={(event) => updateSounds(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Vibration on selected alerts</span><input type="checkbox" checked={vibrationEnabled} onChange={(event) => updateVibration(event.target.checked)} className="size-5 accent-primary"/></label><p className="mt-1 text-[11px] text-muted-foreground">These preferences are stored on this device. Android notification permission and device sound settings still apply.</p></section>}
+      {showNotificationSettings && <section className="mx-3 mt-2 rounded-2xl border border-border bg-card p-3 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">Notification preferences</h2><button type="button" onClick={() => setShowNotificationSettings(false)} aria-label="Close notification settings" className="flex size-10 items-center justify-center rounded-full hover:bg-secondary"><X className="size-4"/></button></div><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Send generic notifications (hide message text)</span><input type="checkbox" checked={hideNotificationPreview} onChange={(event) => updateNotificationPreview(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>App sounds</span><input type="checkbox" checked={soundsEnabled} onChange={(event) => updateSounds(event.target.checked)} className="size-5 accent-primary"/></label><label className="flex min-h-12 items-center justify-between gap-3 text-sm"><span>Vibration on selected alerts</span><input type="checkbox" checked={vibrationEnabled} onChange={(event) => updateVibration(event.target.checked)} className="size-5 accent-primary"/></label><p className="mt-1 text-[11px] text-muted-foreground">These preferences are stored on this device. Generic notification text applies to alerts sent from this account. Android notification permission and device sound settings still apply.</p></section>}
 
       {/* Messages Scroll Area */}
       <main ref={chatScrollRef} onScroll={handleChatScroll} className="relative flex-1 overflow-y-auto px-4 py-4">
