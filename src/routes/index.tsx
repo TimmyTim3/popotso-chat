@@ -466,7 +466,7 @@ function ChatRoom({ session }: { session: Session }) {
       haptic("warning");
     } finally {
       uploadControllers.current.delete(clientId);
-      URL.revokeObjectURL(localUrl);
+      // Keep the object URL alive while this message bubble is mounted.
     }
   };
 
