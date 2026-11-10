@@ -134,7 +134,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(!reverse) snakeDirectionRef.current=direction;
   };
   useEffect(() => {
-    if(game!=="snake" || !solo) return;
+    if(selected!=="snake" || !solo) return;
     const onKey=(event:KeyboardEvent)=>{
       const map:Record<string,"up"|"down"|"left"|"right">={ArrowUp:"up",w:"up",ArrowDown:"down",s:"down",ArrowLeft:"left",a:"left",ArrowRight:"right",d:"right"};
       const direction=map[event.key];
@@ -142,7 +142,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     };
     window.addEventListener("keydown",onKey);
     return ()=>window.removeEventListener("keydown",onKey);
-  },[game,solo]);
+  },[selected,solo]);
   useEffect(() => {
     if(game!=="snake" || !solo) return;
     const timer=window.setInterval(()=>{
@@ -267,6 +267,27 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(winner) next={...next,winner,winnerLine};
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
+  const rollSnakesLadders = async () => {
+    if(!current || selected!=="snakes-ladders" || current.winner || busy) return;
+    if(active && current.turnId!==userId) return;
+    setBusy(true);
+    const dice=1+Math.floor(Math.random()*6);
+    const positions=advanceLadderBoard((current.board as any).positions ?? {},userId,dice);
+    const opponentId=active ? (userId===active.challenger_id ? active.opponent_id ?? userId : active.challenger_id) : "ai";
+    let winner=positions[userId]===100 ? "You win!" : null;
+    let next={...current,board:{positions,dice},turnId:opponentId,winner};
+    if(!active && !winner){
+      await new Promise((resolve)=>window.setTimeout(resolve,650));
+      const aiDice=1+Math.floor(Math.random()*6);
+      const aiPositions=advanceLadderBoard(positions,"ai",aiDice);
+      winner=aiPositions.ai===100 ? "Computer wins!" : null;
+      next={...next,board:{positions:aiPositions,dice:aiDice},turnId:userId,winner};
+    }
+    if(active) await updateGame(next,winner ? userId : undefined);
+    else setSoloState(next);
+    setBusy(false);
+  };
+
   const chooseRps = async (choice: string) => {
     if (!current || current.choices?.[userId] || (active && !isMyTurn) || rpsCountdown) return;
     setRpsCountdown("Rock…");
