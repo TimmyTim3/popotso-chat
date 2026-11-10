@@ -406,7 +406,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const playerMark = active ? (active.challenger_id === userId ? "X" : "O") : "X";
 
   const playTtt = async (index: number) => {
-    if (!current || current.board[index] || winnerTtt(current.board) || !isMyTurn) return;
+    if (!current || current.board[index] || winnerTtt(current.board) || !isMyTurn || thinking || busy || waiting) return;
     const mark = active ? playerMark : "X";
     const board = [...current.board]; board[index] = mark;
     let winner = winnerTtt(board);
@@ -416,7 +416,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       setThinking(true);
       await new Promise((resolve) => window.setTimeout(resolve, 800));
       const lines: [number,number,number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-      const findMove = (mark:string) => lines.find((line) => line.filter((i) => board[i] === mark).length === 2 && line.some((i) => !board[i]))?.find((i) => !board[i]);
+      const findMove = (side:string) => lines.find((line) => line.filter((i) => board[i] === side).length === 2 && line.some((i) => !board[i]))?.find((i) => !board[i]);
       const ai = findMove("O") ?? findMove("X") ?? (!board[4] ? 4 : [0,2,6,8].find((i) => !board[i]) ?? board.findIndex((v:string)=>!v));
       if (ai >= 0) board[ai] = "O";
       winner = winnerTtt(board);
@@ -425,11 +425,15 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       setThinking(false);
     }
     if (winner) next = { ...next, winner, winnerLine };
-    if (active) await updateGame(next, winner ? (winner === "draw" ? null : wi  const playConnect = async (col: number) => {
+    if (active) await updateGame(next, winner ? (winner === "draw" ? null : winner === "X" ? active.challenger_id : active.opponent_id) : undefined);
+    else setSoloState(next);
+  };
+
+  const playConnect = async (col: number) => {
     if (!current || current.winner || winnerConnect(current.board) || !isMyTurn || thinking || busy || waiting) return;
-    const board = dropConnectDisc(current.board, col, active ? playerMark : "X");
-    if (!board) return;
     const playerMarkForDrop = active ? playerMark : "X";
+    const board = dropConnectDisc(current.board, col, playerMarkForDrop);
+    if (!board) return;
     const playerRow = board.findIndex((row:string[], index:number) => row[col] !== (current.board as string[][])[index]?.[col]);
     setConnectLastDrop({ row: playerRow, col, mark: playerMarkForDrop });
     let winner = winnerConnect(board);
@@ -439,15 +443,17 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       await updateGame(next, winner ? (winner==="draw" ? null : winner==="X" ? active.challenger_id : active.opponent_id) : undefined);
       return;
     }
-    // Render the player's disc immediately, then give the computer a full three-second turn pause.
+
+    // Make the player's disc visibly fall before the computer begins its three-second thinking pause.
     setSoloState(next);
     if (winner) return;
     setThinking(true);
     await new Promise(resolve => window.setTimeout(resolve, 3000));
+
     const legal = (board[0] ?? []).map((v:string,i:number)=>v ? -1 : i).filter((v:number)=>v>=0);
-    const wins = (mark:string) => legal.find((column:number) => {
-      const trial=dropConnectDisc(board,column,mark);
-      return trial ? winnerConnect(trial)===mark : false;
+    const wins = (side:string) => legal.find((column:number) => {
+      const trial=dropConnectDisc(board,column,side);
+      return trial ? winnerConnect(trial)===side : false;
     });
     const chosen = wins("O") ?? wins("X") ?? [...legal].sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
     if (chosen !== undefined) {
@@ -463,8 +469,6 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       }
     }
     setThinking(false);
-  };
-raw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
   const playDraughts = async (square:number) => {
     if(!current || current.winner || thinking || waiting || busy || draughtsAnimation || !isMyTurn) return;
