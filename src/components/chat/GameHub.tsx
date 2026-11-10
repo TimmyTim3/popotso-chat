@@ -179,6 +179,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [selectedDraughtsPiece, setSelectedDraughtsPiece] = useState<number|null>(null);
   const [ladderDiceRolling, setLadderDiceRolling] = useState(false);
   const [ladderDiceFace, setLadderDiceFace] = useState(1);
+  const [ladderDiceRevealed, setLadderDiceRevealed] = useState(false);
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
@@ -396,11 +397,13 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const animateTurn = async (positions:Record<string,number>, player:string) => {
       const start=positions[player]??0;
       const dice=rollFairDie();
+      setLadderDiceRevealed(false);
       setLadderDiceFace(rollFairDie());
       setLadderDiceRolling(true);
       await new Promise(resolve=>window.setTimeout(resolve,650));
       setLadderDiceFace(dice);
       setLadderDiceRolling(false);
+      setLadderDiceRevealed(true);
       // Keep the settled number visible for three full seconds before moving any piece.
       await new Promise(resolve=>window.setTimeout(resolve,3000));
       const landing=start+dice;
@@ -661,7 +664,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             </div>}
             {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
               <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
-              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
+              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling||ladderDiceRevealed?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
               <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border border-border bg-secondary p-1">
                 {Array.from({length:100},(_,index)=>{
                   const row=Math.floor(index/10),col=index%10,rowFromBottom=9-row;
