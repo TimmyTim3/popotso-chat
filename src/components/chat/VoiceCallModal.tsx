@@ -108,7 +108,7 @@ export function VoiceCallModal({
       pulse();
       ringIntervalRef.current = setInterval(pulse, isIncoming ? 800 : 1500);
 
-      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      if (typeof navigator !== "undefined" && "vibrate" in navigator && localStorage.getItem("popotso-vibration-enabled") !== "false") {
         navigator.vibrate([400, 200, 400, 1000]);
         vibrateIntervalRef.current = setInterval(() => {
           navigator.vibrate([400, 200, 400, 1000]);
