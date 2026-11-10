@@ -389,16 +389,20 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   };
 
   const rollSnakesLadders = async () => {
-    if(!current || selected!=="snakes-ladders" || current.winner || busy) return;
+    if(!current || selected!=="snakes-ladders" || current.winner || busy || ladderDiceRolling) return;
     if(active && current.turnId!==userId) return;
+    if(!active && current.turnId!=="ai" && current.turnId!==userId) return;
     setBusy(true); setLadderMessage("");
     const animateTurn = async (positions:Record<string,number>, player:string) => {
       const start=positions[player]??0;
       const dice=rollFairDie();
+      setLadderDiceFace(rollFairDie());
       setLadderDiceRolling(true);
-      await new Promise(resolve=>window.setTimeout(resolve,3000));
+      await new Promise(resolve=>window.setTimeout(resolve,650));
       setLadderDiceFace(dice);
       setLadderDiceRolling(false);
+      // Keep the settled number visible for three full seconds before moving any piece.
+      await new Promise(resolve=>window.setTimeout(resolve,3000));
       const landing=start+dice;
       const destination=landing>100?start:(SNAKES_LADDERS[landing]??landing);
       const nextPositions={...positions,[player]:start};
@@ -407,7 +411,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         nextPositions[player]=square; setLadderVisualPositions({...nextPositions});
         await new Promise(resolve=>window.setTimeout(resolve,145));
       }
-      if(landing>100) setLadderMessage("You need an exact roll to reach 100.");
+      if(landing>100) setLadderMessage(player==="ai"?"Computer needs an exact roll to reach 100.":"You need an exact roll to reach 100.");
       else if(destination!==landing){
         setLadderMessage(destination>landing?"Ladder! Climbing up! 🪜":"Snake! Sliding down! 🐍");
         await new Promise(resolve=>window.setTimeout(resolve,250));
@@ -421,42 +425,65 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       return {positions:nextPositions,dice,destination,landing};
     };
     try {
-      const initial=(current.board as any).positions??{};
-      const first=await animateTurn(initial,userId);
-      let positions=first.positions;
-      let winner=positions[userId]===100?"You win!":null;
-      const opponentId=active?(userId===active.challenger_id?active.opponent_id??userId:active.challenger_id):"ai";
-      let lastRoll=first.dice;
-      let earnedExtraTurn=shouldRollAgain(lastRoll,winner);
-      if(earnedExtraTurn) setLadderMessage("You rolled a 6 — your turn again! 🎲");
-      while(shouldRollAgain(lastRoll,winner)) {
-        const extra=await animateTurn(positions,userId);
-        positions=extra.positions;
-        lastRoll=extra.dice;
-        winner=positions[userId]===100?"You win!":null;
-        if(shouldRollAgain(lastRoll,winner)) {
-          earnedExtraTurn=true;
-          setLadderMessage("You rolled a 6 — your turn again! 🎲");
+      const positions=(current.board as any).positions??{};
+      const isComputerTurn=!active && current.turnId==="ai";
+      if(!isComputerTurn) {
+        const result=await animateTurn(positions,userId);
+        const nextPositions=result.positions;
+        const winner=nextPositions[userId]===100?"You win!":null;
+        if(winner) {
+          const next={...current,board:{positions:nextPositions,dice:result.dice},turnId:userId,winner};
+          setLadderMessage("You reached 100 — you win! 🏆");
+          if(active) await updateGame(next,userId); else setSoloState(next);
+          return;
         }
-      }
-      let next={...current,board:{positions,dice:lastRoll},turnId:shouldRollAgain(lastRoll,winner)?userId:opponentId,winner};
-      if(!active&&!winner&&!shouldRollAgain(lastRoll,winner)){
-        setLadderMessage("Computer's turn…");
-        await new Promise(resolve=>window.setTimeout(resolve,650));
-        let aiRoll=0;
+        if(result.dice===6) {
+          const next={...current,board:{positions:nextPositions,dice:result.dice},turnId:userId,winner:null};
+          setLadderMessage("You rolled a 6! 🎉 You get another turn — tap Roll dice when you're ready.");
+          if(active) await updateGame(next); else setSoloState(next);
+          return;
+        }
+        if(active) {
+          const opponentId=userId===active.challenger_id?(active.opponent_id??userId):active.challenger_id;
+          const next={...current,board:{positions:nextPositions,dice:result.dice},turnId:opponentId,winner:null};
+          setLadderMessage("Your turn is over — opponent's turn.");
+          await updateGame(next);
+          return;
+        }
+        // In solo play, the computer only starts after the player's non-six roll.
+        let computerPositions=nextPositions;
+        let computerRoll=0;
+        let computerWinner:string|null=null;
         do {
-          const ai=await animateTurn(positions,"ai");
-          positions=ai.positions;
-          aiRoll=ai.dice;
-          winner=positions["ai"]===100?"Computer wins!":null;
-          next={...next,board:{positions,dice:aiRoll},turnId:aiRoll===6&&!winner?"ai":userId,winner};
-          if(shouldRollAgain(aiRoll,winner)) setLadderMessage("Computer rolled a 6 — it rolls again! 🎲");
-        } while(shouldRollAgain(aiRoll,winner));
-        if(!winner&&!shouldRollAgain(aiRoll,winner)) setLadderMessage("Your turn — roll the dice!");
-      } else if(active && !shouldRollAgain(lastRoll,winner) && !winner) {
-        setLadderMessage(earnedExtraTurn?"You rolled a 6 and took your extra turn — opponent's turn.":"Your turn is over — opponent's turn.");
+          setLadderMessage("Computer's turn…");
+          await new Promise(resolve=>window.setTimeout(resolve,550));
+          const ai=await animateTurn(computerPositions,"ai");
+          computerPositions=ai.positions;
+          computerRoll=ai.dice;
+          computerWinner=computerPositions.ai===100?"Computer wins!":null;
+          if(computerWinner) break;
+          if(computerRoll===6) setLadderMessage("Computer rolled a 6 — it gets another turn! 🎲");
+        } while(computerRoll===6);
+        const next={...current,board:{positions:computerPositions,dice:computerRoll},turnId:userId,winner:computerWinner};
+        setLadderMessage(computerWinner?"Computer reached 100 — game over!":"Your turn — roll the dice!");
+        setSoloState(next);
+        return;
       }
-      if(active) await updateGame(next,winner?userId:undefined); else setSoloState(next);
+      // Computer's extra rolls are automatic because it is the computer's turn.
+      let computerPositions=positions;
+      let computerRoll=0;
+      let computerWinner:string|null=null;
+      do {
+        const ai=await animateTurn(computerPositions,"ai");
+        computerPositions=ai.positions;
+        computerRoll=ai.dice;
+        computerWinner=computerPositions.ai===100?"Computer wins!":null;
+        if(computerWinner) break;
+        if(computerRoll===6) setLadderMessage("Computer rolled a 6 — it gets another turn! 🎲");
+      } while(computerRoll===6);
+      const next={...current,board:{positions:computerPositions,dice:computerRoll},turnId:userId,winner:computerWinner};
+      setLadderMessage(computerWinner?"Computer reached 100 — game over!":"Your turn — roll the dice!");
+      setSoloState(next);
     } finally { setBusy(false); }
   };
 
