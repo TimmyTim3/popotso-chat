@@ -184,7 +184,7 @@ export function Composer({
             type="button"
             aria-label="Send voice note"
             onClick={() => stopRecording(false)}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform active:scale-90"
+            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all duration-200 active:scale-90"
           >
             <Square className="size-3.5 fill-current" />
           </button>
@@ -232,7 +232,7 @@ export function Composer({
             type="button"
             aria-label="Attach files"
             onClick={() => fileRef.current?.click()}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground transition-transform active:scale-90"
+            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground shadow-sm transition-all duration-200 hover:bg-secondary/80 active:scale-90"
           >
             <Plus className="size-5" />
           </button>
