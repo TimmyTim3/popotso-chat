@@ -243,10 +243,11 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         const ate=nextHead[0]===board.food[0]&&nextHead[1]===board.food[1];
         const bodyToCheck=ate?board.body:board.body.slice(0,-1);
         const hit=nextHead[0]!<0||nextHead[0]!>=16||nextHead[1]!<0||nextHead[1]!>=16||bodyToCheck.some(([x,y])=>x===nextHead[0]&&y===nextHead[1]);
-        if(hit)return {...previous,board:{...board,over:true},winner:"Game over!"};
+        if(hit){playSound("wrong");return {...previous,board:{...board,over:true},winner:"Game over!"};}
         const body=[nextHead,...(ate?board.body:board.body.slice(0,-1))];
         let food=board.food,score=board.score;
         if(ate){
+          playSound("correct");
           score+=10;
           const empty:number[][]=[];
           for(let y=0;y<16;y++)for(let x=0;x<16;x++)if(!body.some(([bx,by])=>bx===x&&by===y))empty.push([x,y]);
@@ -858,8 +859,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
               </div>
               {current?.winner && <button onClick={()=>void reset()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Play again</button>}
             </div>}
-            {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
-              <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
+            {game==="snakes-ladders" && <div className="mx-auto max-w-[420px]">
+              <div className="mb-3 flex items-center justify-between"><p className="text-base font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
               <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling||ladderDiceRevealed?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":ladderCountdown|| (ladderDiceRevealed?`Rolled ${ladderDiceFace}`:current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin")} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
               <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border-2 border-border bg-secondary p-1">
                 {Array.from({length:100},(_,index)=>{
