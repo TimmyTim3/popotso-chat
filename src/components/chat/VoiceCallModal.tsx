@@ -31,7 +31,7 @@ interface VoiceCallModalProps {
     sdp: RTCSessionDescriptionInit;
     isVideo?: boolean;
   } | null;
-  onClose: () => void;
+  onClose: (summary: { connected: boolean; durationSeconds: number; dataBytes: number; video: boolean; outcome: 'completed' | 'missed' | 'no-answer' | 'declined' }) => void;
 }
 
 type CallStatus = "connecting" | "ringing" | "incoming" | "connected" | "ended";
@@ -53,6 +53,9 @@ export function VoiceCallModal({
   const [videoMuted, setVideoMuted] = useState(false);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const connectedRef = useRef(false);
+  const startedAtRef = useRef<number | null>(null);
+  const closeOnceRef = useRef(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -170,13 +173,28 @@ export function VoiceCallModal({
         timerRef.current = null;
       }
 
+      const pc = pcRef.current;
+      const finish = async () => {
+        let dataBytes = 0;
+        if (pc) {
+          try {
+            const stats = await pc.getStats();
+            stats.forEach((report) => {
+              if (report.type === "outbound-rtp" && !report.isRemote) dataBytes += Number(report.bytesSent ?? 0);
+              if (report.type === "inbound-rtp" && !report.isRemote) dataBytes += Number(report.bytesReceived ?? 0);
+            });
+          } catch (error) { console.warn("Could not read call data usage", error); }
+        }
+        const durationSeconds = startedAtRef.current ? Math.max(seconds, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 0;
+        const outcome = connectedRef.current ? "completed" : incomingCall ? "declined" : "no-answer";
+        if (!closeOnceRef.current) {
+          closeOnceRef.current = true;
+          onClose({ connected: connectedRef.current, durationSeconds, dataBytes, video: isVideo, outcome });
+        }
+      };
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       remoteStreamRef.current?.getTracks().forEach((t) => t.stop());
-
-      if (pcRef.current) {
-        pcRef.current.close();
-        pcRef.current = null;
-      }
+      if (pc) { pc.close(); pcRef.current = null; }
 
       localStreamRef.current = null;
       remoteStreamRef.current = null;
@@ -190,9 +208,9 @@ export function VoiceCallModal({
       }
 
       setStatus("ended");
-      setTimeout(() => onClose(), 600);
+      setTimeout(() => { void finish(); }, 600);
     },
-    [channel, myId, onClose, stopRingtone],
+    [channel, myId, onClose, stopRingtone, seconds, incomingCall, isVideo],
   );
 
   const setupPeerConnection = useCallback(
@@ -217,7 +235,7 @@ export function VoiceCallModal({
 
       pc.ontrack = (event) => {
         stopRingtone();
-        setStatus("connected");
+        connectedRef.current = true; startedAtRef.current ??= Date.now(); setStatus("connected");
         const stream = event.streams[0] ?? null;
         remoteStreamRef.current = stream;
 
