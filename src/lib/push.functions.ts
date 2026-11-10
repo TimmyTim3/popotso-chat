@@ -8,11 +8,12 @@ const MEMBERS = ["tim@popotso.app", "nicky@popotso.app", "mother@popotso.app"];
 /** Sends a lock-screen alert to the other parent's registered devices. */
 export const notifyPartner = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { preview: string; title?: string; type?: string; challengeId?: string }) => ({
+  .inputValidator((data: { preview: string; title?: string; type?: string; challengeId?: string; hidePreview?: boolean }) => ({
     preview: String(data?.preview ?? "").slice(0, 140),
     title: data.title ? String(data.title).slice(0, 50) : undefined,
     type: data.type ? String(data.type).slice(0, 20) : "message",
     challengeId: data.challengeId ? String(data.challengeId).slice(0, 80) : undefined,
+    hidePreview: Boolean(data.hidePreview),
   }))
   .handler(async ({ data, context }) => {
     const email = String((context.claims as { email?: string }).email ?? "").toLowerCase();
@@ -67,7 +68,7 @@ export const notifyPartner = createServerFn({ method: "POST" })
             message: {
               payload: {
                 title: notificationTitle,
-                body: data.preview || "New message",
+                body: data.hidePreview ? "You have a new Popotso notification" : data.preview || "New message",
                 type: data.type || "message",
                 challengeId: data.challengeId,
               },
