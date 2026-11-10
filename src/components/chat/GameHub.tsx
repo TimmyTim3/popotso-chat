@@ -179,6 +179,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [ladderDiceRolling, setLadderDiceRolling] = useState(false);
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
+  const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
+  const [quizFeedback, setQuizFeedback] = useState<boolean|null>(null);
   const snakeTouchStart = useRef<{x:number;y:number}|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
 
@@ -266,7 +268,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     }).eq("id", active.id).select("*").single();
     if (!error) { setActive(data as Challenge); void load(); }
   };
-  const startSolo = (game: GameType) => { snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
+  const startSolo = (game: GameType) => { setLadderVisualPositions(null);setLadderMessage("");setDraughtsCaptureAt(null);setQuizFeedback(null);snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
   const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
@@ -340,8 +342,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const move=legal.find(candidate=>candidate.from===selectedDraughtsPiece&&candidate.to===square);
     if(!move){setSelectedDraughtsPiece(null);return;}
     let applied=applyDraughtsMove(board,move);
-    if(move.capture!==null)setNotice(`${side==="r"?"Red":"Black"} captured a ${draughtsSide(board[move.capture]!)==="r"?"red":"black"} piece!`);
-    else setNotice("Piece moved.");
+    if(move.capture!==null){setDraughtsCaptureAt(move.capture);setNotice(`${side==="r"?"Red":"Black"} captured a ${draughtsSide(board[move.capture]!)==="r"?"red":"black"} piece!`);}
+    else {setDraughtsCaptureAt(null);setNotice("Piece moved.");}
     let nextBoard=applied.board;
     let nextForced=applied.forcedPiece;
     let nextSide=nextForced!==null?side:(side==="r"?"b":"r");
@@ -466,6 +468,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   };
   const submitQuiz = async (index: number) => {
     if(!current || current.answers?.[userId]!==undefined || (active && !isMyTurn)) return;
+    const activeQuestion=QUIZ[(current.questionPool?.[current.question] ?? current.question) % QUIZ.length]!;
+    setQuizFeedback(index===activeQuestion.correct);
     const pool=current.questionPool?.length ? current.questionPool : [...QUIZ.keys()];
     const q=QUIZ[pool[current.question % pool.length] ?? 0]!;
     const correct=index===q.correct;
@@ -484,6 +488,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   };
   const nextQuizQuestion = () => {
     if (!current || !solo) return;
+    setQuizFeedback(null);
     const nextQuestion=current.question+1;
     if(nextQuestion >= (current.questionPool?.length ?? QUIZ.length)) {
       setSoloState({...current,question:0,questionPool:[...QUIZ.keys()].sort(()=>Math.random()-0.5),answers:{},lastCorrect:undefined});
@@ -499,6 +504,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
 
   const reset = async () => {
     if(!game) return;
+    setLadderVisualPositions(null);setLadderMessage("");setDraughtsCaptureAt(null);setQuizFeedback(null);
     const next=initialState(game,active?.challenger_id??userId);
     snakeDirectionRef.current = "right";
     if(active) await updateGame(next,null); else setSoloState(next);
@@ -559,7 +565,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   const selectable=legal.some(move=>move.from===index);
                   const target=selectedDraughtsPiece!==null&&legal.some(move=>move.from===selectedDraughtsPiece&&move.to===index);
                   const selected=selectedDraughtsPiece===index;
-                  return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
+                  return <button key={index} type="button" onClick={()=>void playDraughts(index)} disabled={!isMyTurn||thinking||Boolean(current?.winner)||waiting} aria-label={"Square "+(row+1)+", "+(col+1)+(piece?", "+(piece==="r"?"red":piece==="b"?"black":piece==="R"?"red king":"black king")+" piece":"")} className={"relative flex aspect-square items-center justify-center "+((row+col)%2===0?"bg-amber-100":"bg-amber-800")+" "+(selected?"z-10 ring-4 ring-inset ring-sky-400":"")+" "+(draughtsCaptureAt===index?"ring-4 ring-inset ring-rose-500 animate-pulse":"")+" "+(target?"after:absolute after:size-3 after:rounded-full after:bg-emerald-400/90":"")}>
                     {piece&&<span className={"flex h-[76%] w-[76%] items-center justify-center rounded-full border-[3px] text-sm font-black shadow-md transition-all duration-200 ease-out "+(draughtsSide(piece)==="r"?"border-red-950 bg-red-600 text-white":"border-neutral-950 bg-neutral-900 text-white")+" "+(piece===piece.toUpperCase()?"ring-2 ring-yellow-300":"")}>{piece===piece.toUpperCase()?"♛":""}</span>}
                     {selectable&&!piece&&<span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-emerald-300"/>}
                   </button>;
@@ -568,9 +574,9 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
               <p className="mt-3 text-center text-xs text-muted-foreground">{current?.forcedPiece!==null&&current?.forcedPiece!==undefined?"You must continue jumping with the selected piece.":"Tap one of your pieces, then tap a highlighted square to move."} Kings can move and capture backwards.</p>
               <button onClick={()=>setSelectedDraughtsPiece(null)} className="mt-2 w-full rounded-xl border border-border p-2 text-xs font-semibold">Clear selection</button>
             </div>}
-            {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border p-4 text-3xl">{e}</button>)}</div>}
-            {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><p className="my-4 text-2xl font-black tracking-[0.3em]">{current?.scrambled??"HNSIUNES"}</p><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button disabled={waiting || !isMyTurn || Boolean(current?.winner)} onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
-            {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">{solo ? `Streak: ${current?.streak??0} 🔥` : `Score: ${(current?.scores?.[userId]??0)}–${(current?.scores?.[active?.opponent_id??""]??0)}`}</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className="rounded-xl border border-border p-3 text-left text-sm">{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
+            {game==="rock-paper-scissors" && <div className="flex justify-center gap-3">{([["rock","✊"],["paper","✋"],["scissors","✌️"]] as [string, string][]).map(([v,e])=><button key={v} onClick={()=>void chooseRps(v)} disabled={Boolean(current?.choices?.[userId])||waiting||!isMyTurn} className="rounded-2xl border border-border bg-card p-5 text-4xl shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-md active:scale-90 disabled:opacity-50">{e}</button>)}</div>}
+            {game==="word-scramble" && <div className="rounded-2xl border border-border p-5 text-center"><p className="text-xs text-muted-foreground">Unscramble this word</p><div className="my-4 flex flex-wrap justify-center gap-1.5">{(current?.scrambled??"HNSIUNES").split("").map((letter:string,index:number)=><span key={`${letter}-${index}`} className="flex size-10 items-center justify-center rounded-lg border border-border bg-secondary text-xl font-black shadow-sm animate-[bounce-in_250ms_ease-out]" style={{animationDelay:`${index*35}ms`}}>{letter}</span>)}</div><input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Your answer" className="w-full rounded-xl border border-border bg-card p-3 text-center uppercase"/><button disabled={waiting || !isMyTurn || Boolean(current?.winner)} onClick={()=>void submitWord()} className="mt-3 w-full rounded-xl bg-primary p-3 text-sm font-semibold text-primary-foreground">Check answer</button></div>}
+            {game==="quick-quiz" && <div className="rounded-2xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold text-primary">Question {(current?.question??0)+1}</span><span className="text-sm font-bold">{solo ? `Streak: ${current?.streak??0} 🔥` : `Score: ${(current?.scores?.[userId]??0)}–${(current?.scores?.[active?.opponent_id??""]??0)}`}</span></div><p className="font-semibold">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.q}</p><div className="mt-3 grid gap-2">{QUIZ[(current?.questionPool?.[current?.question??0] ?? (current?.question??0)) % QUIZ.length]!.a.map((a,i)=><button key={a} onClick={()=>void submitQuiz(i)} disabled={waiting||current?.answers?.[userId]!==undefined||!isMyTurn} className={`rounded-xl border p-3 text-left text-sm transition-all duration-200 active:scale-[0.98] ${current?.answers?.[userId]!==undefined&&i===q.correct?"border-emerald-500 bg-emerald-500/15":current?.answers?.[userId]===false&&quizFeedback===false?"border-rose-500 bg-rose-500/10":"border-border"}`}>{a}</button>)}</div>{solo && current?.lastCorrect!==undefined && <div className="mt-3 rounded-xl bg-secondary p-3 text-sm">{current.lastCorrect?"Correct! Great job! 🎉":"Good try! Keep going 💛"}<button onClick={nextQuizQuestion} className="mt-3 w-full rounded-xl bg-primary p-3 font-semibold text-primary-foreground">Next Question ➡️</button></div>}</div>}
             {game==="snake" && <div className="mx-auto max-w-[340px]">
               <div className="mb-3 flex items-center justify-between"><span className="text-sm font-semibold">Score: {(current?.board as any)?.score ?? 0}</span><span className="text-xs text-muted-foreground">Use arrows or swipe buttons</span></div>
               <div onTouchStart={event=>{const t=event.touches[0];if(t)snakeTouchStart.current={x:t.clientX,y:t.clientY};}} onTouchEnd={event=>{const start=snakeTouchStart.current;const t=event.changedTouches[0];snakeTouchStart.current=null;if(!start||!t)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.max(Math.abs(dx),Math.abs(dy))<22)return;if(Math.abs(dx)>Math.abs(dy))setSnakeDirection(dx>0?"right":"left");else setSnakeDirection(dy>0?"down":"up");}} onTouchMove={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} className="grid gap-px overflow-hidden rounded-xl border-4 border-emerald-700 bg-emerald-100 p-1" style={{aspectRatio:"1 / 1",gridTemplateColumns:"repeat(16,minmax(0,1fr))",touchAction:"none",userSelect:"none"}}>
