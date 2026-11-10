@@ -191,7 +191,7 @@ export function MessageBubble({
   return (
     <div
       id={`message-${message.id}`}
-      className={`group relative mb-2 flex flex-col ${
+      className={`group relative mb-2 flex flex-col animate-[message-in_180ms_ease-out] motion-reduce:animate-none transition-all duration-200 ${
         outgoing ? "items-end" : "items-start"
       }`}
     >
@@ -211,7 +211,7 @@ export function MessageBubble({
                   key={emoji}
                   type="button"
                   onClick={() => handleReaction(emoji)}
-                  className="flex size-8 items-center justify-center rounded-full text-lg transition hover:scale-125 active:scale-95"
+                  className="flex size-10 items-center justify-center rounded-full text-lg transition hover:scale-110 active:scale-95"
                 >
                   {emoji}
                 </button>
