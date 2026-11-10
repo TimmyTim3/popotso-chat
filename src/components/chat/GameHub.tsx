@@ -23,6 +23,8 @@ type GameState = {
   snakeDirection?: "up" | "down" | "left" | "right";
   snakeNextDirection?: "up" | "down" | "left" | "right";
   forcedPiece?: number | null;
+  computerTakeoverBy?: string | null;
+  computerTakeoverAt?: string | null;
 };
 type Challenge = {
   id: string; game_type: GameType; challenger_id: string; opponent_id: string | null;
@@ -284,6 +286,84 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if (error) { setNotice("That challenge is no longer available."); await load(); return; }
     setActive(data as Challenge); setSelected(challenge.game_type); setSolo(false);
   };
+  const requestComputerTakeover = async () => {
+    if (!active || active.status !== "active" || active.state.computerTakeoverBy) return;
+    const next = { ...active.state, computerTakeoverBy: userId, computerTakeoverAt: new Date().toISOString() };
+    const { data, error } = await (supabase as any).from("game_challenges").update({ state: next, updated_at: new Date().toISOString() }).eq("id", active.id).eq("status", "active").select("*").single();
+    if (error) { setNotice("Couldn't hand over control. Please try again."); return; }
+    setActive(data as Challenge);
+    void notifyPartner({ data: { preview: "🤖 The computer has temporarily taken over their side of your game. They'll take back control when they return.", title: "Computer took over", type: "game", challengeId: active.id } }).catch(()=>{});
+  };
+  const takeBackControl = async () => {
+    if (!active || active.state.computerTakeoverBy !== userId) return;
+    const next = { ...active.state, computerTakeoverBy: null, computerTakeoverAt: null };
+    const { data, error } = await (supabase as any).from("game_challenges").update({ state: next, updated_at: new Date().toISOString() }).eq("id", active.id).eq("status", "active").select("*").single();
+    if (error) { setNotice("Couldn't reclaim control. Please try again."); return; }
+    setActive(data as Challenge);
+    const partnerId = userId === active.challenger_id ? active.opponent_id : active.challenger_id;
+    if (partnerId) void notifyPartner({ data: { preview: "🙌 They're back and have taken control of their side again.", title: "Player returned", type: "game", challengeId: active.id } }).catch(()=>{});
+  };
+  // The online opponent's device acts as the temporary host while the absent player is away.
+  // It persists each AI move to the shared challenge, so the absent player can safely return later.
+  useEffect(() => {
+    if (!active || active.status !== "active" || !active.opponent_id || !active.state.computerTakeoverBy || active.state.computerTakeoverBy === userId || active.state.turnId !== active.state.computerTakeoverBy || active.state.winner) return;
+    const timer = window.setTimeout(async () => {
+      const state = active.state;
+      const missing = state.computerTakeoverBy!;
+      const mark = missing === active.challenger_id ? "X" : "O";
+      let next: GameState = { ...state };
+      let winner: string | null = null;
+      if (active.game_type === "tic-tac-toe") {
+        const board = [...(state.board as string[])];
+        const lines: [number,number,number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+        const pick = lines.find(line=>line.every(i=>board[i]===mark))?.find(i=>!board[i]) ?? lines.find(line=>line.every(i=>board[i]!== (mark==="X"?"O":"X"))&&line.some(i=>!board[i]))?.find(i=>!board[i]) ?? (board[4] ? board.findIndex(v=>!v) : 4);
+        if (pick>=0) board[pick]=mark;
+        winner=winnerTtt(board);
+        next={...state,board,turnId:missing===active.challenger_id?active.opponent_id!:active.challenger_id,winner:winner??null,winnerLine:findTttWinningLine(board)??undefined};
+      } else if (active.game_type === "connect-four") {
+        const board=(state.board as string[][]).map(row=>[...row]);
+        const legal=board[0]!.map((v,i)=>v?-1:i).filter(i=>i>=0);
+        const wins=(m:string)=>legal.find(col=>{const b=dropConnectDisc(board,col,m);return !!b&&winnerConnect(b)===m;});
+        const col=wins(mark)??wins(mark==="X"?"O":"X")??legal.sort((a,b)=>Math.abs(a-3)-Math.abs(b-3))[0];
+        if(col!==undefined){const b=dropConnectDisc(board,col,mark);if(b)board.splice(0,6,...b);}
+        winner=winnerConnect(board);
+        next={...state,board,turnId:missing===active.challenger_id?active.opponent_id!:active.challenger_id,winner:winner??null,winnerLine:findConnectWinningLine(board)?.flatMap(([row,col])=>[row*7+col])};
+      } else if (active.game_type === "draughts") {
+        let board=[...(state.board as string[])], forced=state.forcedPiece??null, side=mark==="X"?"r":"b";
+        const moves=getDraughtsLegalMoves(board,side,forced);
+        if(moves.length){const captures=moves.filter(m=>m.capture!==null);const move=(captures.length?captures:moves)[Math.floor(Math.random()*(captures.length?captures.length:moves.length))]!;const applied=applyDraughtsMove(board,move);board=applied.board;forced=applied.forcedPiece;}
+        winner=getDraughtsWinner(board);
+        const sameTurn=forced!==null;
+        next={...state,board,forcedPiece:forced,turnId:sameTurn?missing:(missing===active.challenger_id?active.opponent_id!:active.challenger_id),winner:winner?(winner==="r"?"Red wins!":"Black wins!"):null};
+      } else if (active.game_type === "rock-paper-scissors") {
+        const choices={...(state.choices??{}),[missing]:["rock","paper","scissors"][Math.floor(Math.random()*3)]!};
+        const other=missing===active.challenger_id?active.opponent_id!:active.challenger_id;
+        if(choices[other]){const a=choices[active.challenger_id],b=choices[active.opponent_id!];winner=a===b?"draw":((a==="rock"&&b==="scissors")||(a==="paper"&&b==="rock")||(a==="scissors"&&b==="paper"))?"X":"O";}
+        next={...state,choices,turnId:missing===active.challenger_id?active.opponent_id!:active.challenger_id,winner:winner??null};
+      } else if (active.game_type === "word-scramble") {
+        next={...state,winner:"Computer solved it! 🤖",turnId:missing};
+        winner="Computer solved it! 🤖";
+      } else if (active.game_type === "quick-quiz") {
+        const pool=state.questionPool?.length?state.questionPool:[...QUIZ.keys()];
+        const q=QUIZ[pool[state.question%pool.length]??0]!;
+        const answers={...(state.answers??{}),[missing]:Math.random()<0.65};
+        const other=missing===active.challenger_id?active.opponent_id!:active.challenger_id;
+        if(answers[other]!==undefined){const scores={...(state.scores??{}),[missing]:(state.scores?.[missing]??0)+(answers[missing]?1:0),[other]:(state.scores?.[other]??0)+(answers[other]?1:0)};next={...state,answers:{},scores,question:state.question+1,turnId:other};}
+        else next={...state,answers,turnId:other};
+      } else if (active.game_type === "snakes-ladders") {
+        const positions={...((state.board as any)?.positions??{})};
+        const dice=rollFairDie();const start=positions[missing]??0;const landing=start+dice;
+        positions[missing]=landing>100?start:(SNAKES_LADDERS[landing]??landing);
+        winner=positions[missing]===100?"Computer reached 100! 🤖":null;
+        next={...state,board:{...state.board,positions,dice},turnId:winner?missing:(dice===6?missing:(missing===active.challenger_id?active.opponent_id!:active.challenger_id)),winner};
+      } else return;
+      const winnerId=winner?(winner==="draw"?null:(winner==="X"?active.challenger_id:winner==="O"?active.opponent_id:missing)):null;
+      await (supabase as any).from("game_challenges").update({state:next,status:winner?"completed":"active",winner_id:winnerId,updated_at:new Date().toISOString()}).eq("id",active.id).eq("updated_at",active.updated_at);
+      void load();
+    }, 1100);
+    return ()=>window.clearTimeout(timer);
+  }, [active?.id,active?.updated_at,active?.state,active?.status,userId,load]);
+
   const updateGame = async (next: GameState, winnerId?: string | null) => {
     if (!active) return;
     const { data, error } = await (supabase as any).from("game_challenges").update({
@@ -642,6 +722,12 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             <div className="mb-4 flex items-center justify-between"><button onClick={()=>{setSelected(null);setActive(null);setSolo(false);}} className="text-sm text-primary">← All games</button><span className="text-xs text-muted-foreground">{solo?"Single player":active?.status==="pending"?"Challenge sent":"Two player"}</span></div>
             <h3 className="mb-2 text-center text-xl font-bold">{title}</h3>
             {waiting && <div className="rounded-2xl bg-secondary p-4 text-center"><Loader2 className="mx-auto mb-2 size-6 animate-spin"/><p className="font-semibold">Challenge sent!</p><p className="text-sm text-muted-foreground">Waiting for {partnerName} to join.</p><button disabled={busy} onClick={()=>{if(active) void cancelChallenge(active);}} className="mt-3 rounded-full border border-destructive/40 px-4 py-2 text-sm font-semibold text-destructive">Withdraw challenge</button></div>}
+            {active?.status==="active" && <div className="mb-3 rounded-xl border border-border bg-card p-3">
+              {active.state.computerTakeoverBy ? <>
+                <p className="text-center text-sm font-semibold">🤖 Computer is temporarily playing {active.state.computerTakeoverBy===userId?"your":"your partner's"} side.</p>
+                {active.state.computerTakeoverBy===userId && <button onClick={()=>void takeBackControl()} className="mt-2 w-full rounded-xl bg-primary p-2.5 text-sm font-bold text-primary-foreground">Take Back Control</button>}
+              </> : active.state.turnId===userId ? <button onClick={()=>void requestComputerTakeover()} disabled={busy} className="w-full rounded-xl border border-primary/40 p-2.5 text-sm font-semibold">🤖 Let Computer Take Over</button> : <p className="text-center text-xs text-muted-foreground">Your partner can hand over to the computer if they need to step away.</p>}
+            </div>}
             {active?.status==="active" && <p className="mb-3 text-center text-sm text-muted-foreground">{isMyTurn?"Your turn!":"Waiting for the other player…"}</p>}
             {thinking && <p className="my-3 flex items-center justify-center gap-2 text-sm text-muted-foreground"><span className="size-2 animate-pulse rounded-full bg-primary"/><span className="size-2 animate-pulse rounded-full bg-primary [animation-delay:150ms]"/><span className="size-2 animate-pulse rounded-full bg-primary [animation-delay:300ms]"/> Computer is thinking…</p>}
             {rpsCountdown && <p className="my-3 text-center text-xl font-bold text-primary">{rpsCountdown}</p>}
