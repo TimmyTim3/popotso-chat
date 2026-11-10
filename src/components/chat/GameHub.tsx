@@ -879,7 +879,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   </div>;
                 })}
               </div>
-              <div className="mt-2 flex justify-center gap-4 text-xs"><span>🔵 You: {(current?.board as any)?.positions?.[userId]??0}</span><span>🟠 {solo?"Computer":partnerName}: {(current?.board as any)?.positions?.[active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai"]??0}</span></div>
+              <div className="mt-2 flex justify-center gap-4 text-xs"><span>🔵 {partnerName === "Tim" ? "Nicky" : "Tim"}: {(current?.board as any)?.positions?.[userId]??0}</span><span>🟠 {solo?"Computer":partnerName}: {(current?.board as any)?.positions?.[active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai"]??0}</span></div>
             </div>}
             {active?.status === "active" && <section className="mt-5 rounded-2xl border border-border bg-card p-3">
               <div className="mb-2 flex items-center justify-between"><h4 className="text-sm font-semibold">Game chat</h4><span className="text-[11px] text-muted-foreground">Quick messages</span></div>
