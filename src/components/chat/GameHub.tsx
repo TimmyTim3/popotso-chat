@@ -126,6 +126,52 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [answer, setAnswer] = useState("");
   const [thinking, setThinking] = useState(false);
   const [rpsCountdown, setRpsCountdown] = useState("");
+  const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
+
+  const setSnakeDirection = (direction: "up" | "down" | "left" | "right") => {
+    const currentDirection=snakeDirectionRef.current;
+    const reverse=(currentDirection==="up"&&direction==="down")||(currentDirection==="down"&&direction==="up")||(currentDirection==="left"&&direction==="right")||(currentDirection==="right"&&direction==="left");
+    if(!reverse) snakeDirectionRef.current=direction;
+  };
+  useEffect(() => {
+    if(game!=="snake" || !solo) return;
+    const onKey=(event:KeyboardEvent)=>{
+      const map:Record<string,"up"|"down"|"left"|"right">={ArrowUp:"up",w:"up",ArrowDown:"down",s:"down",ArrowLeft:"left",a:"left",ArrowRight:"right",d:"right"};
+      const direction=map[event.key];
+      if(direction){event.preventDefault();setSnakeDirection(direction);}
+    };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[game,solo]);
+  useEffect(() => {
+    if(game!=="snake" || !solo) return;
+    const timer=window.setInterval(()=>{
+      setSoloState((previous)=>{
+        if(!previous||previous.winner)return previous;
+        const board=previous.board as {body:number[][];food:number[];score:number;over:boolean};
+        if(!board||board.over)return previous;
+        const direction=snakeDirectionRef.current;
+        const delta:Record<string,number[]>={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]};
+        const vector=delta[direction]??[1,0];
+        const head=board.body[0]??[7,7];
+        const nextHead=[head[0]!+vector[0]!,head[1]!+vector[1]!];
+        const ate=nextHead[0]===board.food[0]&&nextHead[1]===board.food[1];
+        const bodyToCheck=ate?board.body:board.body.slice(0,-1);
+        const hit=nextHead[0]!<0||nextHead[0]!>=16||nextHead[1]!<0||nextHead[1]!>=16||bodyToCheck.some(([x,y])=>x===nextHead[0]&&y===nextHead[1]);
+        if(hit)return {...previous,board:{...board,over:true},winner:"Game over!"};
+        const body=[nextHead,...board.body.slice(0,ate?undefined:-1)];
+        let food=board.food,score=board.score;
+        if(ate){
+          score+=10;
+          const empty:number[][]=[];
+          for(let y=0;y<16;y++)for(let x=0;x<16;x++)if(!body.some(([bx,by])=>bx===x&&by===y))empty.push([x,y]);
+          food=empty[Math.floor(Math.random()*empty.length)]??[0,0];
+        }
+        return {...previous,board:{body,food,score,over:false},snakeDirection:direction};
+      });
+    },170);
+    return ()=>window.clearInterval(timer);
+  },[game,solo]);
 
   const load = useCallback(async () => {
     const { data, error } = await (supabase as any).from("game_challenges").select("*").order("created_at", { ascending: false }).limit(30);
