@@ -18,7 +18,7 @@ type GameState = {
   questionPool?: number[];
   streak?: number;
   lastCorrect?: boolean | undefined;
-  winnerLine?: number[] | [number, number][];
+  winnerLine?: number[];
   snakeDirection?: "up" | "down" | "left" | "right";
   snakeNextDirection?: "up" | "down" | "left" | "right";
 };
@@ -246,7 +246,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const board = dropConnectDisc(current.board, col, active ? playerMark : "X");
     if (!board) return;
     let winner = winnerConnect(board);
-    let winnerLine = findConnectWinningLine(board) ?? undefined;
+    let winnerLine = findConnectWinningLine(board)?.map(([row,col])=>row*7+col) ?? undefined;
     let next = { ...current, board, turnId: active ? (userId===active.challenger_id?(active.opponent_id ?? userId):active.challenger_id) : "ai" };
     if(!active && !winner) {
       setThinking(true);
@@ -259,7 +259,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       const chosen = wins("O") ?? wins("X") ?? [...legal].sort((a:number,b:number)=>Math.abs(a-3)-Math.abs(b-3))[0];
       if (chosen !== undefined) {
         const aiBoard=dropConnectDisc(board,chosen,"O");
-        if(aiBoard) { board.splice(0,board.length,...aiBoard); winner=winnerConnect(board); winnerLine=findConnectWinningLine(board) ?? undefined; }
+        if(aiBoard) { board.splice(0,board.length,...aiBoard); winner=winnerConnect(board); winnerLine=findConnectWinningLine(board)?.map(([row,col])=>row*7+col) ?? undefined; }
       }
       next={...next,board,turnId:userId};
       setThinking(false);
