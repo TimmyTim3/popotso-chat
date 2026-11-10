@@ -3,6 +3,7 @@ import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy, Send } from "lucide-react
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 import { rollFairDie, shouldRollAgain, resolveLadderCollision } from "@/lib/snakes-ladders";
+import { playSound } from "@/lib/sounds";
 
 type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders" | "draughts";
 type GameState = {
@@ -188,6 +189,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [ladderDiceRevealed, setLadderDiceRevealed] = useState(false);
   const [ladderVisualPositions, setLadderVisualPositions] = useState<Record<string, number> | null>(null);
   const [ladderMessage, setLadderMessage] = useState("");
+  const [ladderCountdown, setLadderCountdown] = useState("");
   const [draughtsCaptureAt, setDraughtsCaptureAt] = useState<number|null>(null);
   const [draughtsAnimation, setDraughtsAnimation] = useState<DraughtsAnimation|null>(null);
   const [draughtsLastMove, setDraughtsLastMove] = useState<{from:number;to:number;capture:number|null}|null>(null);
@@ -267,6 +269,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   useEffect(() => { void load(); const ch = supabase.channel("popotso-games").on("postgres_changes", { event: "*", schema: "public", table: "game_challenges" }, () => void load()).subscribe(); return () => { void supabase.removeChannel(ch); }; }, [load]);
 
   const createChallenge = async (game: GameType) => {
+    playSound("game");
     setBusy(true); setNotice("");
     const { data, error } = await (supabase as any).from("game_challenges").insert({
       game_type: game, challenger_id: userId, status: "pending", state: initialState(game, userId),
@@ -547,26 +550,38 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     const animateTurn = async (positions:Record<string,number>, player:string) => {
       const start=positions[player]??0;
       const dice=rollFairDie();
+      const ownName = partnerName === "Tim" ? "Nicky" : "Tim";
+      const rollerName = player === "ai" ? "Computer" : active ? (player === userId ? ownName : partnerName) : ownName;
       setLadderDiceRevealed(false);
+      setLadderCountdown("");
+      playSound("dice");
       setLadderDiceFace(rollFairDie());
       setLadderDiceRolling(true);
       await new Promise(resolve=>window.setTimeout(resolve,650));
       setLadderDiceFace(dice);
       setLadderDiceRolling(false);
       setLadderDiceRevealed(true);
-      // Keep the settled number visible for three full seconds before moving any piece.
-      await new Promise(resolve=>window.setTimeout(resolve,3000));
+      setLadderMessage(`${rollerName} rolled ${dice}`);
+      for(let seconds=3;seconds>=1;seconds--){
+        setLadderCountdown(`${rollerName} rolled ${dice} — moving in ${seconds}…`);
+        playSound("tick");
+        await new Promise(resolve=>window.setTimeout(resolve,1000));
+      }
+      setLadderCountdown(`${rollerName} rolled ${dice} — Moving…`);
+      playSound("move");
       const landing=start+dice;
       const destination=landing>100?start:(SNAKES_LADDERS[landing]??landing);
       const nextPositions={...positions,[player]:start};
       setLadderVisualPositions({...nextPositions});
       for(let square=start+1;square<=Math.min(landing,100)&&landing<=100;square++){
         nextPositions[player]=square; setLadderVisualPositions({...nextPositions});
-        await new Promise(resolve=>window.setTimeout(resolve,145));
+        playSound("move");
+        await new Promise(resolve=>window.setTimeout(resolve,190));
       }
       if(landing>100) setLadderMessage(player==="ai"?"Computer needs an exact roll to reach 100.":"You need an exact roll to reach 100.");
       else if(destination!==landing){
         setLadderMessage(destination>landing?"Ladder! Climbing up! 🪜":"Snake! Sliding down! 🐍");
+        playSound(destination>landing?"ladder":"snake");
         await new Promise(resolve=>window.setTimeout(resolve,250));
         const step=destination>landing?1:-1;
         for(let square=landing+step;step>0?square<=destination:square>=destination;square+=step){
@@ -576,7 +591,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       }
       const collision=resolveLadderCollision(nextPositions,player,destination);
       Object.assign(nextPositions,collision.positions);
-      if(collision.kickedPlayer) setLadderMessage(player==="ai"?"You were landed on — back to start!":"You landed on your opponent — they go back to start!");
+      if(collision.kickedPlayer) { setLadderMessage(player==="ai"?"You were landed on — back to start!":"You landed on your opponent — they go back to start!"); playSound("capture"); }
       return {positions:nextPositions,dice,destination,landing,kickedPlayer:collision.kickedPlayer};
     };
     try {
@@ -586,6 +601,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
         const result=await animateTurn(positions,userId);
         const nextPositions=result.positions;
         const winner=nextPositions[userId]===100?"You win!":null;
+        if(winner) playSound("win");
         if(winner) {
           const next={...current,board:{positions:nextPositions,dice:result.dice},turnId:userId,winner};
           setLadderMessage("You reached 100 — you win! 🏆");
@@ -619,6 +635,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
           computerRoll=ai.dice;
           computerKickedPlayer=ai.kickedPlayer;
           computerWinner=computerPositions.ai===100?"Computer wins!":null;
+          if(computerWinner) playSound("win");
           if(computerWinner) break;
           if(computerRoll===6) setLadderMessage("Computer rolled a 6 — it gets another turn! 🎲");
         } while(computerRoll===6);
@@ -834,8 +851,8 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
             </div>}
             {game==="snakes-ladders" && <div className="mx-auto max-w-[360px]">
               <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold">First to square 100 wins</p><button disabled={busy||ladderDiceRolling||Boolean(current?.winner)||Boolean(active&&current?.turnId!==userId)||waiting} onClick={()=>void rollSnakesLadders()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">🎲 Roll dice</button></div>
-              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling||ladderDiceRevealed?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":ladderDiceRevealed?`You rolled: ${ladderDiceFace} — moving in 3 seconds`:current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin"} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
-              <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border border-border bg-secondary p-1">
+              <div className="mb-2 flex items-center justify-center gap-3"><div className={`flex size-14 items-center justify-center rounded-2xl border-2 border-primary/30 bg-card text-3xl shadow-md ${ladderDiceRolling?"animate-bounce":""}`}>{ladderDiceRolling||ladderDiceRevealed?["","⚀","⚁","⚂","⚃","⚄","⚅"][ladderDiceFace]:["","⚀","⚁","⚂","⚃","⚄","⚅"][current?.board?.dice??0]??"🎲"}</div><p className="text-sm text-muted-foreground">{ladderDiceRolling?"Rolling…":ladderCountdown|| (ladderDiceRevealed?`Rolled ${ladderDiceFace}`:current?.board?.dice?`Last roll: ${current.board.dice}`:"Roll to begin")} · {active?(isMyTurn?"Your turn":"Opponent's turn"):"You vs Computer"}</p></div>{ladderMessage&&<p className="mb-2 rounded-xl bg-primary/10 p-2 text-center text-sm font-semibold">{ladderMessage}</p>}
+              <div className="grid grid-cols-10 gap-0.5 overflow-hidden rounded-xl border-2 border-border bg-secondary p-1">
                 {Array.from({length:100},(_,index)=>{
                   const row=Math.floor(index/10),col=index%10,rowFromBottom=9-row;
                   const offset=rowFromBottom%2===0?col:9-col;
@@ -845,10 +862,10 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
                   const opponentKey=active?(userId===active.challenger_id?active.opponent_id:active.challenger_id):"ai";
                   const opponentHere=opponentKey && positions[opponentKey]===number;
                   const jump=SNAKES_LADDERS[number];
-                  return <div key={number} className={`relative flex aspect-square flex-col items-center justify-center rounded-sm text-[9px] font-semibold ${jump?(jump>number?"bg-emerald-200 text-emerald-900":"bg-rose-200 text-rose-900"):"bg-card"}`}>
+                  return <div key={number} className={`relative flex aspect-square flex-col items-center justify-center rounded-sm text-[11px] font-bold ${jump?(jump>number?"bg-emerald-200 text-emerald-900":"bg-rose-200 text-rose-900"):"bg-card"}`}>
                     <span>{number}</span>
-                    {jump && <span className="text-[7px]">{jump>number?"↗":"↘"}{jump}</span>}
-                    <div className="absolute bottom-0 flex gap-0.5">{userHere&&<span className="size-2 rounded-full bg-blue-600 ring-2 ring-white transition-all duration-100"/>}{opponentHere&&<span className="size-2 rounded-full bg-amber-500 ring-2 ring-white transition-all duration-100"/>}</div>
+                    {jump && <span className="text-[9px] font-bold">{jump>number?"↗":"↘"}{jump}</span>}
+                    <div className="absolute bottom-0.5 flex gap-0.5">{userHere&&<span className="size-3 rounded-full bg-blue-600 ring-2 ring-white shadow-md transition-all duration-200"/>}{opponentHere&&<span className="size-3 rounded-full bg-amber-500 ring-2 ring-white shadow-md transition-all duration-200"/>}</div>
                   </div>;
                 })}
               </div>
