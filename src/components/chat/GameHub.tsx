@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 
-type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz";
+type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders";
 type GameState = {
   board: any;
   turnId: string;
@@ -18,6 +18,9 @@ type GameState = {
   questionPool?: number[];
   streak?: number;
   lastCorrect?: boolean | undefined;
+  winnerLine?: number[] | [number, number][];
+  snakeDirection?: "up" | "down" | "left" | "right";
+  snakeNextDirection?: "up" | "down" | "left" | "right";
 };
 type Challenge = {
   id: string; game_type: GameType; challenger_id: string; opponent_id: string | null;
@@ -30,6 +33,8 @@ const GAMES: { id: GameType; name: string; detail: string; icon: string }[] = [
   { id: "rock-paper-scissors", name: "Rock Paper Scissors", detail: "A little luck, a little strategy.", icon: "✊" },
   { id: "word-scramble", name: "Word Scramble", detail: "Unscramble the word and see who solves it first.", icon: "🔤" },
   { id: "quick-quiz", name: "Family Quiz", detail: "Fun general-knowledge questions.", icon: "🧠" },
+  { id: "snake", name: "Snake", detail: "Guide the snake, eat the fruit and beat your best score. Solo game.", icon: "🐍" },
+  { id: "snakes-ladders", name: "Snakes & Ladders", detail: "Roll the dice, climb ladders and avoid the snakes.", icon: "🎲" },
 ];
 const WORDS = ["SUNSHINE", "ELEPHANT", "RAINBOW", "POPCORN", "BUTTERFLY", "CHOCOLATE", "ADVENTURE"];
 const QUIZ = [
@@ -67,9 +72,10 @@ const QUIZ = [
   { q: "What is the natural home of a lion called?", a: ["Savanna", "Arctic", "Ocean"], correct: 0 },
 ];
 const initialState = (game: GameType, first: string): GameState => ({
-  board: game === "tic-tac-toe" ? Array(9).fill("") : game === "connect-four" ? Array.from({ length: 6 }, () => Array(7).fill("")) : [],
+  board: game === "tic-tac-toe" ? Array(9).fill("") : game === "connect-four" ? Array.from({ length: 6 }, () => Array(7).fill("")) : game === "snake" ? { body: [[7, 7], [6, 7], [5, 7]], food: [10, 7], score: 0, over: false } : game === "snakes-ladders" ? { positions: { [first]: 0, ai: 0 }, dice: null } : [],
   turnId: first, round: 0, choices: {}, scores: {}, answers: {}, word: WORDS[0] ?? "SUNSHINE", scrambled: "HNSIUNES",
   question: 0, questionPool: [...QUIZ.keys()].sort(() => Math.random() - 0.5), streak: 0, winner: null,
+  snakeDirection: "right", snakeNextDirection: "right",
 });
 const winnerTtt = (b: string[]) => {
   const lines: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
