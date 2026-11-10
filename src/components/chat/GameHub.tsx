@@ -3,7 +3,7 @@ import { ArrowLeft, Gamepad2, Loader2, Swords, Trophy } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 
-type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders";
+type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders" | "draughts";
 type GameState = {
   board: any;
   turnId: string;
@@ -21,6 +21,7 @@ type GameState = {
   winnerLine?: number[];
   snakeDirection?: "up" | "down" | "left" | "right";
   snakeNextDirection?: "up" | "down" | "left" | "right";
+  forcedPiece?: number | null;
 };
 type Challenge = {
   id: string; game_type: GameType; challenger_id: string; opponent_id: string | null;
@@ -35,6 +36,7 @@ const GAMES: { id: GameType; name: string; detail: string; icon: string }[] = [
   { id: "quick-quiz", name: "Family Quiz", detail: "Fun general-knowledge questions.", icon: "🧠" },
   { id: "snake", name: "Snake", detail: "Guide the snake, eat the fruit and beat your best score. Solo game.", icon: "🐍" },
   { id: "snakes-ladders", name: "Snakes & Ladders", detail: "Roll the dice, climb ladders and avoid the snakes.", icon: "🎲" },
+  { id: "draughts", name: "Draughts / Checkers", detail: "Jump your opponent, crown kings and capture every piece.", icon: "♟️" },
 ];
 const WORDS = ["SUNSHINE", "ELEPHANT", "RAINBOW", "POPCORN", "BUTTERFLY", "CHOCOLATE", "ADVENTURE"];
 const QUIZ = [
@@ -72,11 +74,58 @@ const QUIZ = [
   { q: "What is the natural home of a lion called?", a: ["Savanna", "Arctic", "Ocean"], correct: 0 },
 ];
 const initialState = (game: GameType, first: string): GameState => ({
-  board: game === "tic-tac-toe" ? Array(9).fill("") : game === "connect-four" ? Array.from({ length: 6 }, () => Array(7).fill("")) : game === "snake" ? { body: [[7, 7], [6, 7], [5, 7]], food: [10, 7], score: 0, over: false } : game === "snakes-ladders" ? { positions: { [first]: 0, ai: 0 }, dice: null } : [],
+  board: game === "tic-tac-toe" ? Array(9).fill("") : game === "connect-four" ? Array.from({ length: 6 }, () => Array(7).fill("")) : game === "snake" ? { body: [[7, 7], [6, 7], [5, 7]], food: [10, 7], score: 0, over: false } : game === "snakes-ladders" ? { positions: { [first]: 0, ai: 0 }, dice: null } : game === "draughts" ? createDraughtsBoard() : [],
   turnId: first, round: 0, choices: {}, scores: {}, answers: {}, word: WORDS[0] ?? "SUNSHINE", scrambled: "HNSIUNES",
   question: 0, questionPool: [...QUIZ.keys()].sort(() => Math.random() - 0.5), streak: 0, winner: null,
   snakeDirection: "right", snakeNextDirection: "right",
 });
+type DraughtsMove = { from: number; to: number; capture: number | null };
+const createDraughtsBoard = () => {
+  const board=Array(64).fill("");
+  for(let row=0;row<3;row++)for(let col=0;col<8;col++)if((row+col)%2===1)board[row*8+col]="b";
+  for(let row=5;row<8;row++)for(let col=0;col<8;col++)if((row+col)%2===1)board[row*8+col]="r";
+  return board;
+};
+const draughtsSide = (piece:string) => piece.toLowerCase();
+const draughtsMovesForPiece = (board:string[],from:number):DraughtsMove[] => {
+  const piece=board[from]; if(!piece) return [];
+  const row=Math.floor(from/8),col=from%8,side=draughtsSide(piece),king=piece!==side;
+  const directions=king?[-1,1]:side==="r"?[-1]:[1];
+  const captures:DraughtsMove[]=[],steps:DraughtsMove[]=[];
+  for(const dr of directions)for(const dc of [-1,1]){
+    const r1=row+dr,c1=col+dc,r2=row+dr*2,c2=col+dc*2;
+    if(r1<0||r1>7||c1<0||c1>7)continue;
+    const adjacent=r1*8+c1;
+    if(board[adjacent] && draughtsSide(board[adjacent])!==side && r2>=0&&r2<8&&c2>=0&&c2<8&&!board[r2*8+c2])
+      captures.push({from,to:r2*8+c2,capture:adjacent});
+    else if(!board[adjacent]) steps.push({from,to:adjacent,capture:null});
+  }
+  return [...captures,...steps];
+};
+const getDraughtsLegalMoves = (board:string[],side:string,forcedPiece:number|null=null):DraughtsMove[] => {
+  const pieces=forcedPiece!==null?[forcedPiece]:board.map((piece,index)=>piece&&draughtsSide(piece)===side?index:-1).filter(index=>index>=0);
+  const moves=pieces.flatMap(index=>draughtsMovesForPiece(board,index)).filter(move=>board[move.from]&&draughtsSide(board[move.from])===side);
+  const captures=moves.filter(move=>move.capture!==null);
+  return captures.length?captures:moves;
+};
+const applyDraughtsMove = (board:string[],move:DraughtsMove) => {
+  const next=[...board],piece=next[move.from]!;
+  next[move.from]=""; next[move.to]=piece;
+  if(move.capture!==null)next[move.capture]="";
+  const row=Math.floor(move.to/8);
+  if(piece==="r"&&row===0)next[move.to]="R";
+  if(piece==="b"&&row===7)next[move.to]="B";
+  const promoted=next[move.to]!==piece;
+  const followUps=move.capture!==null&&!promoted?draughtsMovesForPiece(next,move.to).filter(candidate=>candidate.capture!==null):[];
+  return {board:next,forcedPiece:followUps.length?move.to:null};
+};
+const getDraughtsWinner = (board:string[]) => {
+  const red=board.some(piece=>draughtsSide(piece)==="r"),black=board.some(piece=>draughtsSide(piece)==="b");
+  if(!red)return "b"; if(!black)return "r";
+  if(!getDraughtsLegalMoves(board,"r").length)return "b";
+  if(!getDraughtsLegalMoves(board,"b").length)return "r";
+  return null;
+};
 const TTT_LINES: [number, number, number][] = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
 const findTttWinningLine = (board: string[]) => TTT_LINES.find(([a,c,d]) => Boolean(board[a]) && board[a] === board[c] && board[a] === board[d]) ?? null;
 const winnerTtt = (board: string[]) => {
