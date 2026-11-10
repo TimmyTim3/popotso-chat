@@ -17,6 +17,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { MEMBERS, type MemberEmail } from "@/lib/care-desk";
 import { haptic } from "@/lib/haptics";
+import { playSound } from "@/lib/sounds";
 
 interface VoiceCallModalProps {
   myId: string;
@@ -253,11 +254,13 @@ export function VoiceCallModal({
   // Caller flow
   useEffect(() => {
     if (!isCaller) {
+      playSound("call");
       startRingtone(true);
       return;
     }
 
     setStatus("connecting");
+    playSound("call");
     startRingtone(false);
 
     void (async () => {
