@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export interface LightboxItem {
   url: string;
@@ -10,13 +10,21 @@ export interface LightboxItem {
 interface LightboxProps {
   item: LightboxItem | null;
   onClose: () => void;
+  items?: LightboxItem[];
+  initialIndex?: number;
 }
 
-export function Lightbox({ item, onClose }: LightboxProps) {
+export function Lightbox({ item, onClose, items = [], initialIndex = 0 }: LightboxProps) {
+  const [index, setIndex] = useState(initialIndex);
+  const gallery = items.length ? items : item ? [item] : [];
+  const activeItem = gallery[index] ?? item;
+  useEffect(() => { setIndex(initialIndex); }, [initialIndex, items]);
   useEffect(() => {
     if (!item) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
+      if (event.key === "ArrowRight") setIndex((current) => Math.min(gallery.length - 1, current + 1));
+      if (event.key === "ArrowLeft") setIndex((current) => Math.max(0, current - 1));
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
@@ -24,9 +32,9 @@ export function Lightbox({ item, onClose }: LightboxProps) {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
     };
-  }, [item, onClose]);
+  }, [item, onClose, gallery.length]);
 
-  if (!item) return null;
+  if (!activeItem) return null;
 
   return (
     <div
@@ -44,15 +52,15 @@ export function Lightbox({ item, onClose }: LightboxProps) {
         <X className="size-4" />
       </button>
       <div className="max-h-full w-full max-w-4xl" onClick={(event) => event.stopPropagation()}>
-        {item.kind === "image" ? (
+        {activeItem.kind === "image" ? (
           <img
-            src={item.url}
-            alt={item.name ?? "Shared photo at full resolution"}
+            src={activeItem.url}
+            alt={activeItem.name ?? "Shared photo at full resolution"}
             className="mx-auto max-h-[88vh] w-auto rounded-2xl object-contain"
           />
         ) : (
           <video
-            src={item.url}
+            src={activeItem.url}
             controls
             autoPlay
             playsInline
@@ -60,6 +68,11 @@ export function Lightbox({ item, onClose }: LightboxProps) {
           />
         )}
       </div>
+      {gallery.length > 1 && <>
+        <button type="button" aria-label="Previous photo" disabled={index === 0} onClick={(event) => { event.stopPropagation(); setIndex((current) => Math.max(0, current - 1)); }} className="absolute left-3 top-1/2 z-10 rounded-full bg-white/15 px-3 py-2 text-2xl text-white disabled:opacity-30">‹</button>
+        <button type="button" aria-label="Next photo" disabled={index === gallery.length - 1} onClick={(event) => { event.stopPropagation(); setIndex((current) => Math.min(gallery.length - 1, current + 1)); }} className="absolute right-3 top-1/2 z-10 rounded-full bg-white/15 px-3 py-2 text-2xl text-white disabled:opacity-30">›</button>
+        <span className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/45 px-3 py-1 text-xs text-white">{index + 1} / {gallery.length}</span>
+      </>}
     </div>
   );
 }
