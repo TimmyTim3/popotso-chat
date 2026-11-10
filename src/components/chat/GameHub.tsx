@@ -175,6 +175,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   const [answer, setAnswer] = useState("");
   const [thinking, setThinking] = useState(false);
   const [rpsCountdown, setRpsCountdown] = useState("");
+  const [selectedDraughtsPiece, setSelectedDraughtsPiece] = useState<number|null>(null);
   const snakeDirectionRef = useRef<"up" | "down" | "left" | "right">("right");
 
   const setSnakeDirection = (direction: "up" | "down" | "left" | "right") => {
@@ -261,7 +262,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     }).eq("id", active.id).select("*").single();
     if (!error) { setActive(data as Challenge); void load(); }
   };
-  const startSolo = (game: GameType) => { snakeDirectionRef.current="right"; setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
+  const startSolo = (game: GameType) => { snakeDirectionRef.current="right"; setSelectedDraughtsPiece(null); setSelected(game); setSolo(true); setActive(null); setSoloState(initialState(game, userId)); setNotice(""); };
   const current: GameState | null = active?.state ?? soloState;
   const game = selected;
   const isMyTurn = !active || !active.opponent_id || current?.turnId === userId;
@@ -316,6 +317,61 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
     if(winner) next={...next,winner,winnerLine};
     if(active) await updateGame(next,winner?(winner==="draw"?null:winner==="X"?active.challenger_id:active.opponent_id):undefined); else setSoloState(next);
   };
+  const playDraughts = async (square:number) => {
+    if(!current || current.winner || thinking || waiting || !isMyTurn) return;
+    const side=solo?"r":(active?.challenger_id===userId?"r":"b");
+    const board=current.board as string[];
+    const forced=current.forcedPiece??null;
+    const legal=getDraughtsLegalMoves(board,side,forced);
+    if(selectedDraughtsPiece===null){
+      if(board[square]&&draughtsSide(board[square])===side&&legal.some(move=>move.from===square)){
+        setSelectedDraughtsPiece(square);
+      }
+      return;
+    }
+    if(board[square]&&draughtsSide(board[square])===side){
+      if(legal.some(move=>move.from===square))setSelectedDraughtsPiece(square);
+      return;
+    }
+    const move=legal.find(candidate=>candidate.from===selectedDraughtsPiece&&candidate.to===square);
+    if(!move){setSelectedDraughtsPiece(null);return;}
+    let applied=applyDraughtsMove(board,move);
+    let nextBoard=applied.board;
+    let nextForced=applied.forcedPiece;
+    let nextSide=nextForced!==null?side:(side==="r"?"b":"r");
+    let winner=getDraughtsWinner(nextBoard);
+    let next:GameState={...current,board:nextBoard,forcedPiece:nextForced,turnId:nextSide==="r"?(active?.challenger_id??userId):(active?.opponent_id??"ai"),winner:winner?(winner==="r"?"Red wins!":"Black wins!"):null};
+    setSelectedDraughtsPiece(nextForced);
+    if(solo&&!winner&&nextSide==="b"){
+      setThinking(true);
+      await new Promise(resolve=>window.setTimeout(resolve,700));
+      let aiBoard=nextBoard,aiForced: number|null=null,aiWinner:string|null=null;
+      let safety=0;
+      do {
+        const aiMoves=getDraughtsLegalMoves(aiBoard,"b",aiForced);
+        if(!aiMoves.length)break;
+        const captureMoves=aiMoves.filter(candidate=>candidate.capture!==null);
+        const choices=captureMoves.length?captureMoves:aiMoves;
+        const aiMove=choices[Math.floor(Math.random()*choices.length)]!;
+        const aiApplied=applyDraughtsMove(aiBoard,aiMove);
+        aiBoard=aiApplied.board; aiForced=aiApplied.forcedPiece;
+        aiWinner=getDraughtsWinner(aiBoard);
+        if(aiForced!==null&&!aiWinner)await new Promise(resolve=>window.setTimeout(resolve,350));
+        safety++;
+      } while(aiForced!==null&&!aiWinner&&safety<12);
+      const finalWinner=aiWinner??getDraughtsWinner(aiBoard);
+      next={...next,board:aiBoard,forcedPiece:null,turnId:userId,winner:finalWinner?(finalWinner==="r"?"Red wins!":"Black wins!"):null};
+      setSoloState(next);
+      setSelectedDraughtsPiece(null);
+      setThinking(false);
+      return;
+    }
+    if(winner)next={...next,winner:next.winner};
+    if(active)await updateGame(next,winner?(winner==="r"?active.challenger_id:active.opponent_id):undefined);
+    else setSoloState(next);
+    if(nextForced===null)setSelectedDraughtsPiece(null);
+  };
+
   const rollSnakesLadders = async () => {
     if(!current || selected!=="snakes-ladders" || current.winner || busy) return;
     if(active && current.turnId!==userId) return;
@@ -424,7 +480,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
-        <button onClick={()=>{setSelected(null);setActive(null);setSolo(false);onClose();}} className="rounded-full p-2 hover:bg-secondary" aria-label="Back"><ArrowLeft className="size-5"/></button>
+        <button onClick={()=>{setSelected(null);setSelectedDraughtsPiece(null);setActive(null);setSolo(false);onClose();}} className="rounded-full p-2 hover:bg-secondary" aria-label="Back"><ArrowLeft className="size-5"/></button>
         <Gamepad2 className="size-5 text-primary"/><h2 className="font-semibold">Popotso Playtime</h2>
       </header>
       {!game ? (
