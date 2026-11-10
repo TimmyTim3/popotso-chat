@@ -97,9 +97,9 @@ function ChatRoom({ session }: { session: Session }) {
   const [showGames, setShowGames] = useState(false);
   const [showFavorites, setShowFavorites] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
-  const [hideNotificationPreview, setHideNotificationPreview] = useState(() => localStorage.getItem("popotso-hide-notification-preview") === "true");
-  const [soundsEnabled, setSoundsEnabledState] = useState(() => localStorage.getItem("popotso-sounds-enabled") !== "false");
-  const [vibrationEnabled, setVibrationEnabled] = useState(() => localStorage.getItem("popotso-vibration-enabled") !== "false");
+  const [hideNotificationPreview, setHideNotificationPreview] = useState(() => typeof window !== "undefined" && localStorage.getItem("popotso-hide-notification-preview") === "true");
+  const [soundsEnabled, setSoundsEnabledState] = useState(() => typeof window === "undefined" || localStorage.getItem("popotso-sounds-enabled") !== "false");
+  const [vibrationEnabled, setVibrationEnabled] = useState(() => typeof window === "undefined" || localStorage.getItem("popotso-vibration-enabled") !== "false");
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("gameChallenge")) setShowGames(true);
@@ -175,6 +175,8 @@ function ChatRoom({ session }: { session: Session }) {
     setMessages([...hydrated, ...pendingOutbox]);
     void markPartnerAsRead();
   }, [userId, markPartnerAsRead]);
+
+  useEffect(() => { setSoundsEnabled(soundsEnabled); }, [soundsEnabled]);
 
   useEffect(() => {
     const unlock = () => unlockSounds();
