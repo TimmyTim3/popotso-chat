@@ -27,6 +27,17 @@ import { deleteBlob, deleteOutbox, getBlob, loadOutbox, putBlob, putOutbox } fro
 import { notifyPartner } from "@/lib/push.functions";
 import { currentPushEnabled, enablePush } from "@/lib/push";
 
+
+function dedupeMessages(items: ChatMessage[]): ChatMessage[] {
+  const byIdentity = new Map<string, ChatMessage>();
+  for (const item of items) {
+    const key = item.client_id || item.id;
+    const previous = byIdentity.get(key);
+    byIdentity.set(key, previous ? { ...previous, ...item } : item);
+  }
+  return [...byIdentity.values()].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+}
+
 const ATTRIBUTION =
   "System Architecture & Platform Engineering by Tim Web Development and Automation Agency. Designed exclusively for secure, high-integrity asynchronous communication and child care logistics.";
 
@@ -121,6 +132,8 @@ function ChatRoom({ session }: { session: Session }) {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const uploadControllers = useRef<Map<string, AbortController>>(new Map());
   const retryingMessages = useRef<Set<string>>(new Set());
+  const vibrationEnabledRef = useRef(vibrationEnabled);
+  vibrationEnabledRef.current = vibrationEnabled;
 
   const userId = session.user.id;
   const email = (session.user.email ?? "") as MemberEmail;
@@ -174,7 +187,7 @@ function ChatRoom({ session }: { session: Session }) {
     const serverClientIds = new Set(hydrated.map((m) => m.client_id).filter(Boolean));
     const pendingOutbox = outbox.filter((m) => !serverClientIds.has(m.client_id));
 
-    setMessages([...hydrated, ...pendingOutbox]);
+    setMessages(dedupeMessages([...hydrated, ...pendingOutbox]));
     void markPartnerAsRead();
   }, [userId, markPartnerAsRead]);
 
@@ -231,20 +244,12 @@ function ChatRoom({ session }: { session: Session }) {
           }
           const incoming: ChatMessage = { ...row, attachment_url: finalUrl };
 
-          setMessages((prev) => {
-            const idx = prev.findIndex((m) => (m.client_id && m.client_id === row.client_id) || m.id === row.id);
-            if (idx >= 0) {
-              const copy = [...prev];
-              copy[idx] = incoming;
-              return copy;
-            }
-            return [...prev, incoming];
-          });
+          setMessages((prev) => dedupeMessages([...prev, incoming]));
 
           if (row.sender_id !== userId) {
             void markPartnerAsRead();
             if (!nearBottomRef.current) setNewMessageCount((count) => count + 1);
-            if (vibrationEnabled) haptic("light");
+            if (vibrationEnabledRef.current) haptic("light");
             playSound("receive");
           }
         },
@@ -283,7 +288,7 @@ function ChatRoom({ session }: { session: Session }) {
             isVideo: payload.isVideo,
           });
           setCallWithVideo(Boolean(payload.isVideo));
-          if (vibrationEnabled) haptic("medium");
+          if (vibrationEnabledRef.current) haptic("medium");
         }
       })
       .subscribe();
@@ -292,9 +297,10 @@ function ChatRoom({ session }: { session: Session }) {
 
     return () => {
       if (typingTimeout.current) window.clearTimeout(typingTimeout.current);
-      channel.unsubscribe();
+      // Fully remove the channel so remounts/settings changes cannot retain stale listeners.
+      void supabase.removeChannel(channel);
     };
-  }, [email, markPartnerAsRead, userId, vibrationEnabled]);
+  }, [email, markPartnerAsRead, userId]);
 
   const patch = (clientId: string, delta: Partial<ChatMessage>) => {
     setMessages((prev) =>
