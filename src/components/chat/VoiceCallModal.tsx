@@ -338,6 +338,7 @@ export function VoiceCallModal({
     try {
       const pc = await setupPeerConnection(isVideo, facingMode);
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.sdp));
+      await flushPendingIceCandidates(pc);
       const answer = await pc.createAnswer();
       const balancedSDP = applyBalancedSDP(answer.sdp ?? "", isVideo);
       const finalAnswer = { type: answer.type, sdp: balancedSDP };
@@ -373,6 +374,7 @@ export function VoiceCallModal({
       if (payload?.sdp && pcRef.current) {
         stopRingtone();
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        await flushPendingIceCandidates(pcRef.current);
         // Keep the UI in a connecting state until ontrack confirms remote media.
       }
     };
@@ -380,10 +382,15 @@ export function VoiceCallModal({
     const handleIce = async (event: { payload: unknown }) => {
       const payload = event.payload as { candidate?: RTCIceCandidateInit; from?: string } | undefined;
       if (payload?.candidate && payload.from !== myId && pcRef.current) {
+        if (!pcRef.current.remoteDescription) {
+          // ICE can arrive before the remote SDP answer/offer over Realtime.
+          pendingIceCandidatesRef.current.push(payload.candidate);
+          return;
+        }
         try {
           await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } catch {
-          // Ignore candidate errors
+        } catch (error) {
+          console.warn("Could not apply call network candidate", error);
         }
       }
     };
