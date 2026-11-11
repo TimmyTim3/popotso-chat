@@ -234,9 +234,13 @@ export function VoiceCallModal({
       };
 
       pc.ontrack = (event) => {
+        // A remote SDP answer is not proof that the call was picked up.
+        // Start billing/display time only once remote media actually arrives.
         stopRingtone();
-        connectedRef.current = true; startedAtRef.current ??= Date.now(); setStatus("connected");
-        const stream = event.streams[0] ?? null;
+        connectedRef.current = true;
+        startedAtRef.current ??= Date.now();
+        setStatus("connected");
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
         remoteStreamRef.current = stream;
 
         if (remoteVideoRef.current && stream) {
@@ -342,7 +346,8 @@ export function VoiceCallModal({
         event: "call-answer",
         payload: { calleeId: myId, sdp: finalAnswer },
       });
-      setStatus("connected");
+      // The call is accepted but not connected until remote audio/video arrives.
+      setStatus("connecting");
     } catch (err: any) {
       stopRingtone();
       setPermissionError("Could not access microphone or camera to accept call.");
@@ -366,7 +371,7 @@ export function VoiceCallModal({
       if (payload?.sdp && pcRef.current) {
         stopRingtone();
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-        setStatus("connected");
+        // Keep the UI in a connecting state until ontrack confirms remote media.
       }
     };
 
