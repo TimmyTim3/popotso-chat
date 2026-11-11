@@ -53,6 +53,8 @@ export function VoiceCallModal({
   const [videoMuted, setVideoMuted] = useState(false);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const secondsRef = useRef(0);
+  secondsRef.current = seconds;
   const connectedRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
   const closeOnceRef = useRef(false);
@@ -185,7 +187,7 @@ export function VoiceCallModal({
             });
           } catch (error) { console.warn("Could not read call data usage", error); }
         }
-        const durationSeconds = startedAtRef.current ? Math.max(seconds, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 0;
+        const durationSeconds = startedAtRef.current ? Math.max(secondsRef.current, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 0;
         const outcome = connectedRef.current ? "completed" : incomingCall ? "declined" : "no-answer";
         if (!closeOnceRef.current) {
           closeOnceRef.current = true;
@@ -210,7 +212,7 @@ export function VoiceCallModal({
       setStatus("ended");
       setTimeout(() => { void finish(); }, 600);
     },
-    [channel, myId, onClose, stopRingtone, seconds, incomingCall, isVideo],
+    [channel, myId, onClose, stopRingtone, incomingCall, isVideo],
   );
 
   const setupPeerConnection = useCallback(
