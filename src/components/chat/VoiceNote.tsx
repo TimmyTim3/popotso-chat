@@ -1,4 +1,4 @@
-import { Pause, Play } from "lucide-react";
+import { Download, Pause, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatDuration } from "@/lib/care-desk";
@@ -32,6 +32,8 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
   const [progress, setProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [speedIndex, setSpeedIndex] = useState(0);
+  const [playSrc, setPlaySrc] = useState(src);
+  const [saved, setSaved] = useState(false);
   const heights = useMemo(() => bars(seed), [seed]);
   const speed = SPEEDS[speedIndex] ?? 1;
 
@@ -56,6 +58,43 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
       audio.removeEventListener("ended", onEnd);
     };
   }, []);
+
+  // Auto-download: keep a full copy on this phone so it plays instantly and offline.
+  useEffect(() => {
+    if (!src || src.startsWith("blob:")) { setPlaySrc(src); return; }
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    const key = `https://popotso.local/vn/${encodeURIComponent(seed)}`;
+    (async () => {
+      try {
+        const cache = "caches" in window ? await caches.open("popotso-voice-notes") : null;
+        let res = cache ? await cache.match(key) : undefined;
+        if (!res) {
+          const net = await fetch(src);
+          if (!net.ok) return;
+          if (cache) await cache.put(key, net.clone());
+          res = net;
+        }
+        const blob = await res.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPlaySrc(objectUrl);
+        setSaved(true);
+      } catch { /* fall back to streaming */ }
+    })();
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [src, seed]);
+
+  const saveToPhone = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    haptic("light");
+    const a = document.createElement("a");
+    a.href = playSrc;
+    a.download = `voice-note-${seed.slice(0, 8)}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = speed;
@@ -87,7 +126,7 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
 
   return (
     <div className="flex min-w-[230px] items-center gap-3">
-      <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
+      <audio ref={audioRef} src={playSrc} preload="metadata" className="hidden" />
       <span
         role="button"
         tabIndex={0}
@@ -149,6 +188,16 @@ export function VoiceNote({ src, durationMs, outgoing, seed }: VoiceNoteProps) {
             )}
           >
             {speed}×
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Save voice note to phone"
+            title={saved ? "Downloaded — tap to save to phone" : "Save to phone"}
+            onClick={saveToPhone}
+            className={cn("ml-1 rounded-full p-1", outgoing ? "bg-bubble-out-foreground/22" : "bg-foreground/8")}
+          >
+            <Download className={cn("size-3", saved ? "opacity-100" : "opacity-60")} />
           </span>
         </div>
       </div>

@@ -350,7 +350,7 @@ export function VoiceCallModal({
         payload: { calleeId: myId, sdp: finalAnswer },
       });
       // The call is accepted but not connected until remote audio/video arrives.
-      setStatus("connecting");
+      if (!connectedRef.current) setStatus("connecting");
     } catch (err: any) {
       stopRingtone();
       setPermissionError("Could not access microphone or camera to accept call.");
@@ -371,10 +371,12 @@ export function VoiceCallModal({
   useEffect(() => {
     const handleAnswer = async (event: { payload: unknown }) => {
       const payload = event.payload as { calleeId?: string; sdp?: RTCSessionDescriptionInit } | undefined;
-      if (payload?.sdp && pcRef.current) {
+      if (payload?.sdp && pcRef.current && pcRef.current.signalingState === "have-local-offer") {
         stopRingtone();
-        await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-        await flushPendingIceCandidates(pcRef.current);
+        try {
+          await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          await flushPendingIceCandidates(pcRef.current);
+        } catch { /* duplicate answer already applied */ }
         // Keep the UI in a connecting state until ontrack confirms remote media.
       }
     };
