@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { notifyPartner } from "@/lib/push.functions";
 import { rollFairDie, shouldRollAgain, resolveLadderCollision } from "@/lib/snakes-ladders";
 import { playSound } from "@/lib/sounds";
+import { FileUploadPanel } from "@/components/chat/FileUploadPanel";
 
 type GameType = "tic-tac-toe" | "connect-four" | "rock-paper-scissors" | "word-scramble" | "quick-quiz" | "snake" | "snakes-ladders" | "draughts";
 type GameState = {
@@ -772,14 +773,7 @@ export function GameHub({ userId, partnerName, onClose }: { userId: string; part
       </header>
       {!game ? (
         <div className="flex-1 overflow-y-auto p-4">
-          <section className="mb-4 rounded-2xl border border-border bg-card p-4" aria-label="File Upload status">
-            <h3 className="mb-3 font-semibold">File Upload</h3>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {["Sync Active", "Syncing...", "Sync Paused", "Permission", "LS Success", "attachment synced"].map((label) => (
-                <div key={label} className="rounded-xl border border-border bg-secondary/50 px-3 py-2 text-center text-xs font-medium">{label}</div>
-              ))}
-            </div>
-          </section>
+          <FileUploadPanel/>
           <div className="mb-4 rounded-2xl bg-primary/10 p-4"><p className="font-semibold">A little friendly competition 💛</p><p className="mt-1 text-sm text-muted-foreground">Play together when you're both online, or enjoy a solo game whenever you like.</p></div>
           {notice && <p className="mb-3 rounded-xl bg-secondary p-3 text-sm">{notice}</p>}
           {incoming.length>0 && <section className="mb-5"><h3 className="mb-2 flex items-center gap-2 font-semibold"><Swords className="size-4"/> Challenges for you</h3>{incoming.map(c=><div key={c.id} className="mb-2 flex items-center justify-between rounded-xl border border-border p-3"><div><p className="font-medium">{GAMES.find(g=>g.id===c.game_type)?.name}</p><p className="text-xs text-muted-foreground">Someone challenged you</p></div><button disabled={busy} onClick={()=>void accept(c)} className="rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground">Ready to join</button></div>)}</section>}
