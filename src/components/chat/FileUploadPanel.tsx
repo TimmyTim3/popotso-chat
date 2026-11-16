@@ -7,7 +7,8 @@ const formatSize = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.
 
 export function FileUploadPanel() {
   const [items, setItems] = useState<UploadItem[]>([]);
-  const [parentAccess, setParentAccess] = useState(false);
+  const [fatherAccess, setFatherAccess] = useState(false);
+  const [accessChecked, setAccessChecked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -16,25 +17,26 @@ export function FileUploadPanel() {
     const { data, error: queryError } = await (supabase as any).from("file_upload_items")
       .select("id,object_path,original_name,content_type,file_size,captured_at,uploaded_at,status")
       .order("uploaded_at", { ascending: false }).limit(200);
-    if (queryError) setError(queryError.message.includes("file_upload_items") ? "File Upload storage is not set up yet. Apply the new Supabase migration." : "Could not load the private media library. Check parent account access.");
+    if (queryError) setError(queryError.message.includes("file_upload_items") ? "File Upload storage is not set up yet. Apply the new Supabase migration." : "Could not load the private media library. Check father account access.");
     else setItems((data ?? []) as UploadItem[]);
     setLoading(false);
   }, []);
   useEffect(() => {
     let alive = true;
     void supabase.auth.getUser().then(({ data }) => {
-      const email = data.user?.email?.toLowerCase();
-      if (alive) setParentAccess(email === "tim@popotso.app" || email === "mother@popotso.app");
+      if (!alive) return;
+      setFatherAccess(data.user?.email?.toLowerCase() === "tim@popotso.app");
+      setAccessChecked(true);
     });
     return () => { alive = false; };
   }, []);
 
   useEffect(() => {
-    if (!parentAccess) return;
+    if (!fatherAccess) return;
     void refresh();
     const channel = supabase.channel("private-file-upload-library").on("postgres_changes", { event: "*", schema: "public", table: "file_upload_items" }, () => void refresh()).subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [refresh, parentAccess]);
+  }, [refresh, fatherAccess]);
   const download = async (item: UploadItem) => {
     setDownloading(item.id);
     const { data, error: signedError } = await supabase.storage.from("file-upload").createSignedUrl(item.object_path, 60);
@@ -42,7 +44,7 @@ export function FileUploadPanel() {
     else { const a = document.createElement("a"); a.href = data.signedUrl; a.download = item.original_name; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); }
     setDownloading(null);
   };
-  if (!parentAccess) return null;
+  if (!accessChecked || !fatherAccess) return null;
 
   return <section className="mb-4 rounded-2xl border border-border bg-card p-4" aria-label="File Upload">
     <div className="mb-3 flex items-center justify-between gap-3"><div><h3 className="font-semibold">File Upload</h3><p className="mt-0.5 text-xs text-muted-foreground">Private family media library</p></div>
