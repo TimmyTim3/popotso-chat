@@ -70,7 +70,7 @@ export const notifyPartner = createServerFn({ method: "POST" })
                 title: notificationTitle,
                 body: data.hidePreview ? "You have a new Popotso notification" : data.preview || "New message",
                 type: data.type || "message",
-                challengeId: data.challengeId,
+                challengeId: data.challengeId ?? "",
               },
               adminContact: "mailto:tim@popotso.app",
             },

@@ -97,7 +97,7 @@ export async function enablePush(userId: string): Promise<PushStatus> {
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey,
+        applicationServerKey: applicationServerKey as BufferSource,
       });
     }
 
